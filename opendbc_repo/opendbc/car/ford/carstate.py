@@ -109,9 +109,18 @@ class CarState(CarStateBase, MadsCarState):
 
     # cruise state
     is_metric = cp.vl["INSTRUMENT_PANEL"]["METRIC_UNITS"] == 1 if not self.CP.flags & FordFlags.CANFD else cp_cam.vl["IPMA_Data2"]["IsaVLimUnit_D_Rq"] == 1
-    ret.cruiseState.speed = cp.vl["EngBrakeData"]["Veh_V_DsplyCcSet"] * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
-    ret.cruiseState.speedCluster = ret.cruiseState.speed  # ICBM needs speedCluster to read current cruise setpoint
     ret.cruiseState.enabled = cp.vl["EngBrakeData"]["CcStat_D_Actl"] in (4, 5)
+    veh_v_dsply_cc_set = cp.vl["EngBrakeData"]["Veh_V_DsplyCcSet"]
+    cruise_speed_raw = veh_v_dsply_cc_set * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
+
+    # For ICBM: When cruise is enabled but Veh_V_DsplyCcSet is 0 (no speed limit detected),
+    # use current vehicle speed as fallback to prevent invalid cruise speed
+    # This prevents the planner from using V_CRUISE_UNSET (255) which gets clamped to 40 m/s
+    if cruise_speed_raw == 0 and ret.cruiseState.enabled:
+      ret.cruiseState.speed = ret.vEgo
+    else:
+      ret.cruiseState.speed = cruise_speed_raw
+    ret.cruiseState.speedCluster = ret.cruiseState.speed  # ICBM needs speedCluster to read current cruise setpoint
     ret.cruiseState.available = cp.vl["EngBrakeData"]["CcStat_D_Actl"] in (3, 4, 5)
     ret.cruiseState.nonAdaptive = cp.vl["Cluster_Info1_FD1"]["AccEnbl_B_RqDrv"] == 0
     ret.cruiseState.standstill = cp.vl["EngBrakeData"]["AccStopMde_D_Rq"] == 3
