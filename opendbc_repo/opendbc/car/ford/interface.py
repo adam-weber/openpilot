@@ -138,4 +138,10 @@ class CarInterface(CarInterfaceBase):
     # Only available when openpilotLongitudinalControl is False (using stock ACC)
     ret.intelligentCruiseButtonManagementAvailable = True
 
+    # For Ford with ICBM: Ensure pcmCruiseSpeed is False to allow speed limit assist to work
+    # This is set here as a default, but will be confirmed in _initialize_intelligent_cruise_button_management
+    # when ICBM is actually enabled by the user
+    if not stock_cp.openpilotLongitudinalControl:
+      ret.pcmCruiseSpeed = False
+
     return ret
