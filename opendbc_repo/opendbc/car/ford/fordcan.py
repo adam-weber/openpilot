@@ -33,6 +33,23 @@ def calculate_lat_ctl2_checksum(mode: int, counter: int, dat: bytearray) -> int:
   return 0xFF - (checksum & 0xFF)
 
 
+def create_angle_control_msg(packer, CAN: CanBus, angle_deg: float, active: bool):
+  """
+  Creates a CAN message for Ford direct angle-based steering control.
+
+  Message: ParkAid_Data (0x3A8)
+  Frequency: 50Hz
+
+  PSCM validates independently via SAPP feedback signals.
+  """
+  values = {
+    "ApaSys_D_Stat": 2 if active else 0,  # 2=On, 0=Null
+    "EPASExtAngleStatReq": 1 if active else 0,  # 1=Request, 0=NoRequest
+    "ExtSteeringAngleReq2": angle_deg if active else 0,  # Angle in degrees
+  }
+  return packer.make_can_msg("ParkAid_Data", CAN.main, values)
+
+
 def create_lka_msg(packer, CAN: CanBus, lat_active: bool, hud_control):
   """
   Creates an empty CAN message for the Ford LKA Command.
@@ -162,7 +179,7 @@ def create_acc_msg(packer, CAN: CanBus, long_active: bool, gas: float, accel: fl
 
 
 def create_acc_ui_msg(packer, CAN: CanBus, CP, main_on: bool, enabled: bool, fcw_alert: bool, standstill: bool,
-                      hud_control, stock_values: dict, send_hands_free_msg: bool, send_ui: bool, send_bars: bool, tja_warn: int, tja_msg: int):
+                      hud_control, stock_values: dict, send_hands_free_msg: bool, send_ui: bool, send_bars: bool, tja_warn: int, tja_msg: int, test_mode_beep: bool = False):
   """
   Creates a CAN message for the Ford IPC adaptive cruise, forward collision warning and traffic jam
   assist status.
@@ -243,6 +260,10 @@ def create_acc_ui_msg(packer, CAN: CanBus, CP, main_on: bool, enabled: bool, fcw
   if fcw_alert:
     values["FcwVisblWarn_B_Rq"] = 1  # FCW visible alert
     values["FcwAudioWarn_B_Rq"] = 1  # FCW audio alert
+
+  # Test mode beep - brief audio alert on mode change
+  if test_mode_beep:
+    values["FcwAudioWarn_B_Rq"] = 1  # Audio beep
 
   return packer.make_can_msg("ACCDATA_3", CAN.main, values)
 

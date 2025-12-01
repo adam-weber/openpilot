@@ -39,6 +39,18 @@ class CarState(CarStateBase, MadsCarState):
     self.distance_button = 0
     self.lc_button = 0
 
+    # Test mode variables
+    import time
+    self.test_mode_active = 0  # 0=OFF, 1=PHYSICS, 2=ANGLE
+    self.test_mode_button_count = 0
+    self.test_mode_button_last_time = 0.0
+    self.test_mode_beep_trigger = False  # Flag for controller to trigger beep
+    self.pam_active = False
+    self.sapp_speed_ok = True
+    self.sapp_signal_valid = True
+    self.sapp_can_reach = True
+    self.sapp_torque_ok = True
+
     # Save the HEV data available flag to a param
     self.params.put_bool("FordPrefHevDataAvailable", True if CP.flags & FordFlags.HEV_CLUSTER_DATA else False)
     self.params.put_bool("FordPrefHevBattDataAvailable", True if CP.flags & FordFlags.HEV_BATTERY_DATA else False)
@@ -102,6 +114,20 @@ class CarState(CarStateBase, MadsCarState):
     ret.steerFaultTemporary = cp.vl["EPAS_INFO"]["EPAS_Failure"] == 1
     ret.steerFaultPermanent = cp.vl["EPAS_INFO"]["EPAS_Failure"] in (2, 3)
     ret.espDisabled = cp.vl["Cluster_Info1_FD1"]["DrvSlipCtlMde_D_Rq"] != 0  # 0 is default mode
+
+    # Detect PAM (Parking Assist Module) and SAPP feedback (only for ALT_STEER_ANGLE)
+    if self.CP.flags & FordFlags.ALT_STEER_ANGLE:
+      self.pam_active = (
+        cp.vl["ParkAid_Data"]["EPASExtAngleStatReq"] == 1
+        or cp.vl["ParkAid_Data"]["ApaSys_D_Stat"] >= 2
+      )
+      # SAPP feedback from PSCM (0 = OK, 1 = NOT OK)
+      self.sapp_speed_ok = cp.vl["EPAS_INFO"]["SAPPAngleControlStat4"] == 0
+      self.sapp_signal_valid = cp.vl["EPAS_INFO"]["SAPPAngleControlStat3"] == 0
+      self.sapp_can_reach = cp.vl["EPAS_INFO"]["SAPPAngleControlStat6"] == 0
+      self.sapp_torque_ok = cp.vl["EPAS_INFO"]["SAPPAngleControlStat5"] == 0
+    else:
+      self.pam_active = False
 
     if self.CP.flags & FordFlags.CANFD:
       # this signal is always 0 on non-CAN FD cars
@@ -169,6 +195,25 @@ class CarState(CarStateBase, MadsCarState):
     # Stock values from IPMA so that we can retain some stock functionality
     self.acc_tja_status_stock_values = cp_cam.vl["ACCDATA_3"]
     self.lkas_status_stock_values = cp_cam.vl["IPMA_Data"]
+
+    # Triple-tap GAP button detection for test mode
+    import time
+    current_time = time.time()
+    if self.distance_button and not prev_distance_button:  # Rising edge
+      if current_time - self.test_mode_button_last_time < 0.7:
+        self.test_mode_button_count += 1
+      else:
+        self.test_mode_button_count = 1
+      self.test_mode_button_last_time = current_time
+
+      if self.test_mode_button_count >= 3:
+        self.test_mode_active = (self.test_mode_active + 1) % 3
+        self.test_mode_button_count = 0
+        self.test_mode_beep_trigger = True  # Trigger beep
+
+    # Timeout reset
+    if current_time - self.test_mode_button_last_time > 2.0:
+      self.test_mode_button_count = 0
 
     MadsCarState.update_mads(self, ret, can_parsers)
 

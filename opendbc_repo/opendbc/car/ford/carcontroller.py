@@ -197,8 +197,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # max absolute values for all four signals
     self.path_angle_max = 0.5  # from dbc files
     self.path_offset_max = 2.0  # too much path offset causes issues
-    self.curvature_max = 0.0115  # 0.02 is max from dbc files, but more than 0.012 can cause windup in big curves
+    self.curvature_max_base = 0.0115  # 0.02 is max from dbc files, but more than 0.012 can cause windup in big curves
+    self.curvature_max = 0.0115  # Updated dynamically based on test mode
     self.curvature_rate_max = 0.001023  # from dbc files
+
+    # Test mode parameters
+    self.angle_mode_max_speed = 4.47  # 10 mph in m/s
+    self.test_mode_beep_frame = 0  # Beep duration counter
 
     # values from previous frame
     self.curvature_rate_last = 0.0
@@ -631,8 +636,44 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if reset_steering == 1:
           path_angle = 0.0
 
+        ########## TEST MODE LOGIC - START ##########
+        send_angle_instead = False
+        curvature_max = self.curvature_max_base
+        test_mode = CS.test_mode_active
+
+        # MODE 1: Physics-based speed-dependent curvature limits
+        if test_mode == 1:
+          v_mps = max(CS.out.vEgoRaw, 0.1)
+          physics_limit = 2.94 / (v_mps ** 2)
+          curvature_max = min(physics_limit, 0.020)
+          curvature_max = max(curvature_max, self.curvature_max_base)
+
+        # MODE 2: Direct angle control (only at low speeds)
+        elif test_mode == 2:
+          if CS.out.vEgoRaw < self.angle_mode_max_speed and not CS.pam_active:
+            if CS.sapp_speed_ok and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
+              # Convert curvature to steering wheel angle
+              wheelbase = 3.076  # Ford Maverick wheelbase in meters
+              steer_ratio = 17.0
+              road_angle_rad = math.atan(apply_curvature * wheelbase)
+              angle_deg = math.degrees(road_angle_rad) * steer_ratio
+              angle_deg = clip(angle_deg, -500.0, 500.0)
+
+              # Send angle control message
+              can_sends.append(fordcan.create_angle_control_msg(
+                self.packer, self.CAN, angle_deg, CC.latActive
+              ))
+              send_angle_instead = True
+              apply_curvature = 0.0
+            else:
+              # Fallback to physics mode if SAPP validation fails
+              v_mps = max(CS.out.vEgoRaw, 0.1)
+              physics_limit = 2.94 / (v_mps ** 2)
+              curvature_max = min(physics_limit, 0.020)
+        ########## TEST MODE LOGIC - END ##########
+
         # clip all values to max.
-        apply_curvature = clip(apply_curvature, -self.curvature_max, self.curvature_max)
+        apply_curvature = clip(apply_curvature, -curvature_max, curvature_max)
         desired_curvature_rate = clip(desired_curvature_rate, -self.curvature_rate_max, self.curvature_rate_max)
         path_offset = clip(path_offset, -self.path_offset_max, self.path_offset_max)
         path_angle = clip(path_angle, -self.path_angle_max, self.path_angle_max)
@@ -686,7 +727,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # set lat_active to the value of CC.latActive
       lat_active = CC.latActive
 
-      if self.CP.flags & FordFlags.CANFD:
+      if self.CP.flags & FordFlags.CANFD and not send_angle_instead:
         # TODO: extended mode
         # Ford uses four individual signals to dictate how to drive to the car. Curvature alone (limited to 0.02m/s^2)
         # can actuate the steering for a large portion of any lateral movements. However, in order to get further control on
@@ -699,7 +740,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.packer, self.CAN, mode, ramp_type, self.precision_type, -path_offset, -path_angle,
           -apply_curvature, -desired_curvature_rate, counter
         ))
-      else:
+      elif not send_angle_instead:
         # Ford non-CANFD lateral control
         can_sends.append(fordcan.create_lat_ctl_msg(
           self.packer, self.CAN, lat_active, ramp_type, self.precision_type,
@@ -756,6 +797,15 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       self.accel_pitch_compensated = accel_pitch_compensated
 
     ### ui ###
+    # Handle test mode beep trigger
+    if CS.test_mode_beep_trigger:
+      self.test_mode_beep_frame = 20  # Beep for ~0.2 seconds
+      CS.test_mode_beep_trigger = False  # Clear flag
+
+    test_mode_beep = self.test_mode_beep_frame > 0
+    if self.test_mode_beep_frame > 0:
+      self.test_mode_beep_frame -= 1
+
     send_ui = (self.main_on_last != main_on) or (self.lkas_enabled_last != CC.latActive) or (self.steer_alert_last != steer_alert)
     # send lkas ui msg at 1Hz or if ui state changes
     if (self.frame % CarControllerParams.LKAS_UI_STEP) == 0 or send_ui:
@@ -795,6 +845,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           send_bars,
           self.tja_warn,
           self.tja_msg,
+          test_mode_beep
         )
       )
 
