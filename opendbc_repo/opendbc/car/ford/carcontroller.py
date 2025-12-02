@@ -374,6 +374,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     path_angle = 0.0 # initialize path_angle
     reset_steering = 0 # initialize reset_steering
     ramp_type = 2 # initialize ramp_type
+    send_angle_instead = False # initialize send_angle_instead for test mode
+    curvature_max = self.curvature_max_base # initialize curvature_max for test mode
+    test_mode = 0 # initialize test_mode
 
     # send steer msg at 20Hz
     if (self.frame % CarControllerParams.STEER_STEP) == 0:
@@ -637,9 +640,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           path_angle = 0.0
 
         ########## TEST MODE LOGIC - START ##########
-        send_angle_instead = False
-        curvature_max = self.curvature_max_base
+        # Update test mode from CarState
         test_mode = CS.test_mode_active
+        if test_mode != 0:
+          debug(f"TEST MODE ACTIVE: {test_mode}, v={CS.out.vEgoRaw:.2f}, curvature_max_base={self.curvature_max_base}")
 
         # MODE 1: Physics-based speed-dependent curvature limits
         if test_mode == 1:

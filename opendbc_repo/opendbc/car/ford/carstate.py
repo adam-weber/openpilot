@@ -1,3 +1,4 @@
+import time
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
@@ -40,7 +41,6 @@ class CarState(CarStateBase, MadsCarState):
     self.lc_button = 0
 
     # Test mode variables
-    import time
     self.test_mode_active = 0  # 0=OFF, 1=PHYSICS, 2=ANGLE
     self.test_mode_button_count = 0
     self.test_mode_button_last_time = 0.0
@@ -197,7 +197,6 @@ class CarState(CarStateBase, MadsCarState):
     self.lkas_status_stock_values = cp_cam.vl["IPMA_Data"]
 
     # Triple-tap GAP button detection for test mode
-    import time
     current_time = time.time()
     if self.distance_button and not prev_distance_button:  # Rising edge
       if current_time - self.test_mode_button_last_time < 0.7:
@@ -210,6 +209,7 @@ class CarState(CarStateBase, MadsCarState):
         self.test_mode_active = (self.test_mode_active + 1) % 3
         self.test_mode_button_count = 0
         self.test_mode_beep_trigger = True  # Trigger beep
+        info(f"TEST MODE CHANGED TO: {self.test_mode_active}")  # Debug logging
 
     # Timeout reset
     if current_time - self.test_mode_button_last_time > 2.0:
