@@ -200,9 +200,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.curvature_max_base = 0.0115  # 0.02 is max from dbc files, but more than 0.012 can cause windup in big curves
     self.curvature_max = 0.0115  # Updated dynamically based on test mode
     self.curvature_rate_max = 0.001023  # from dbc files
+    self.curvature_rate_max_test = 0.003  # Higher rate for test modes (faster steering response)
+    self.curvature_rate_max_unwind = 0.008  # Even faster when unwinding (going back to zero)
 
     # Test mode parameters
-    self.angle_mode_max_speed = 4.47  # 10 mph in m/s
+    self.physics_mode_max_speed = 11.18  # 25 mph in m/s
+    self.angle_mode_max_speed = 8.94  # 20 mph in m/s
     self.test_mode_beep_frame = 0  # Beep duration counter
 
     # values from previous frame
@@ -645,8 +648,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if test_mode != 0:
           debug(f"TEST MODE ACTIVE: {test_mode}, v={CS.out.vEgoRaw:.2f}, curvature_max_base={self.curvature_max_base}")
 
-        # MODE 1: Physics-based speed-dependent curvature limits
-        if test_mode == 1:
+        # MODE 1: Physics-based speed-dependent curvature limits (below 25 mph)
+        if test_mode == 1 and CS.out.vEgoRaw < self.physics_mode_max_speed:
           v_mps = max(CS.out.vEgoRaw, 0.1)
           physics_limit = 2.94 / (v_mps ** 2)
           curvature_max = min(physics_limit, 0.020)
@@ -654,7 +657,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
         # MODE 2: Direct angle control (only at low speeds)
         elif test_mode == 2:
+          debug(f"MODE2: v={CS.out.vEgoRaw:.2f}, max={self.angle_mode_max_speed:.2f}, pam={CS.pam_active}")
           if CS.out.vEgoRaw < self.angle_mode_max_speed and not CS.pam_active:
+            debug(f"MODE2 SAPP: speed={CS.sapp_speed_ok}, valid={CS.sapp_signal_valid}, reach={CS.sapp_can_reach}, torque={CS.sapp_torque_ok}")
             if CS.sapp_speed_ok and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
               # Convert curvature to steering wheel angle
               wheelbase = 3.076  # Ford Maverick wheelbase in meters
@@ -664,6 +669,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
               angle_deg = clip(angle_deg, -500.0, 500.0)
 
               # Send angle control message
+              debug(f"MODE2 SENDING ANGLE: {angle_deg:.1f} deg")
               can_sends.append(fordcan.create_angle_control_msg(
                 self.packer, self.CAN, angle_deg, CC.latActive
               ))
@@ -676,9 +682,19 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
               curvature_max = min(physics_limit, 0.020)
         ########## TEST MODE LOGIC - END ##########
 
-        # clip all values to max.
+        # clip all values to max (use higher rate limit for test modes)
+        # Anti-windup: Allow faster unwinding (going back to zero) than winding up
+        if test_mode != 0:
+          # Check if we're unwinding (curvature getting closer to zero)
+          current_curvature = apply_curvature
+          last_curvature = self.curvature_rate_last if hasattr(self, 'curvature_rate_last') else 0.0
+          is_unwinding = abs(current_curvature) < abs(last_curvature) or (current_curvature * last_curvature < 0)
+          curvature_rate_limit = self.curvature_rate_max_unwind if is_unwinding else self.curvature_rate_max_test
+        else:
+          curvature_rate_limit = self.curvature_rate_max
+
         apply_curvature = clip(apply_curvature, -curvature_max, curvature_max)
-        desired_curvature_rate = clip(desired_curvature_rate, -self.curvature_rate_max, self.curvature_rate_max)
+        desired_curvature_rate = clip(desired_curvature_rate, -curvature_rate_limit, curvature_rate_limit)
         path_offset = clip(path_offset, -self.path_offset_max, self.path_offset_max)
         path_angle = clip(path_angle, -self.path_angle_max, self.path_angle_max)
 

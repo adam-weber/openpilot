@@ -127,7 +127,12 @@ class CarState(CarStateBase, MadsCarState):
       self.sapp_can_reach = cp.vl["EPAS_INFO"]["SAPPAngleControlStat6"] == 0
       self.sapp_torque_ok = cp.vl["EPAS_INFO"]["SAPPAngleControlStat5"] == 0
     else:
+      # If no ALT_STEER_ANGLE flag, assume SAPP is always OK (let PSCM validate)
       self.pam_active = False
+      self.sapp_speed_ok = True
+      self.sapp_signal_valid = True
+      self.sapp_can_reach = True
+      self.sapp_torque_ok = True
 
     if self.CP.flags & FordFlags.CANFD:
       # this signal is always 0 on non-CAN FD cars
