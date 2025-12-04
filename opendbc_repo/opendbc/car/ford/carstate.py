@@ -50,6 +50,7 @@ class CarState(CarStateBase, MadsCarState):
     self.sapp_signal_valid = True
     self.sapp_can_reach = True
     self.sapp_torque_ok = True
+    self.sapp_handshake = 0  # PSCM handshake state: 0=Closed, 1=Open/Ready, 2=Active, 3=Error
 
     # Save the HEV data available flag to a param
     self.params.put_bool("FordPrefHevDataAvailable", True if CP.flags & FordFlags.HEV_CLUSTER_DATA else False)
@@ -126,6 +127,9 @@ class CarState(CarStateBase, MadsCarState):
       self.sapp_signal_valid = cp.vl["EPAS_INFO"]["SAPPAngleControlStat3"] == 0
       self.sapp_can_reach = cp.vl["EPAS_INFO"]["SAPPAngleControlStat6"] == 0
       self.sapp_torque_ok = cp.vl["EPAS_INFO"]["SAPPAngleControlStat5"] == 0
+      # SAPP handshake state from PSCM (SAPPAngleControlStat1)
+      # 0=Closed/Init, 1=Open/Ready, 2=Active, 3=Error/Lost
+      self.sapp_handshake = cp.vl["EPAS_INFO"]["SAPPAngleControlStat1"]
     else:
       # If no ALT_STEER_ANGLE flag, assume SAPP is always OK (let PSCM validate)
       self.pam_active = False
@@ -133,6 +137,7 @@ class CarState(CarStateBase, MadsCarState):
       self.sapp_signal_valid = True
       self.sapp_can_reach = True
       self.sapp_torque_ok = True
+      self.sapp_handshake = 0
 
     if self.CP.flags & FordFlags.CANFD:
       # this signal is always 0 on non-CAN FD cars

@@ -208,6 +208,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.angle_mode_max_speed = 8.94  # 20 mph in m/s
     self.test_mode_beep_frame = 0  # Beep duration counter
 
+    # SAPP handshake state machine for Mode 2 (angle control)
+    self.sapp_state = 0  # 0=Null, 1=Handshaking, 2=Active
+    self.sapp_angle_req = 0  # 0=NoRequest, 1=Request
+
     # values from previous frame
     self.curvature_rate_last = 0.0
     self.path_offset_last = 0.0
@@ -655,12 +659,28 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           curvature_max = min(physics_limit, 0.020)
           curvature_max = max(curvature_max, self.curvature_max_base)
 
-        # MODE 2: Direct angle control (only at low speeds)
+        # MODE 2: Direct angle control with SAPP handshake (only at low speeds)
         elif test_mode == 2:
-          debug(f"MODE2: v={CS.out.vEgoRaw:.2f}, max={self.angle_mode_max_speed:.2f}, pam={CS.pam_active}")
+          debug(f"MODE2: v={CS.out.vEgoRaw:.2f}, max={self.angle_mode_max_speed:.2f}, pam={CS.pam_active}, handshake={CS.sapp_handshake}")
           if CS.out.vEgoRaw < self.angle_mode_max_speed and not CS.pam_active:
+            # SAPP handshake state machine (like PhoenixPilot)
+            # PSCM responds via SAPPAngleControlStat1: 0=Closed, 1/2=Open/Ready, 3=Error
+            if CS.sapp_handshake in [1, 2]:  # PSCM is ready
+              if CC.latActive:
+                self.sapp_state = 2  # Active - send angle requests
+                self.sapp_angle_req = 1
+              else:
+                self.sapp_state = 1  # Handshaking but not steering
+                self.sapp_angle_req = 0
+            else:
+              self.sapp_state = 1  # Initiate/maintain handshake
+              self.sapp_angle_req = 0
+
+            debug(f"MODE2 SAPP: handshake={CS.sapp_handshake}, state={self.sapp_state}, req={self.sapp_angle_req}")
             debug(f"MODE2 SAPP: speed={CS.sapp_speed_ok}, valid={CS.sapp_signal_valid}, reach={CS.sapp_can_reach}, torque={CS.sapp_torque_ok}")
-            if CS.sapp_speed_ok and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
+
+            # Only send angle commands if PSCM handshake is ready and all checks pass
+            if self.sapp_state == 2 and CS.sapp_speed_ok and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
               # Convert curvature to steering wheel angle
               wheelbase = 3.076  # Ford Maverick wheelbase in meters
               steer_ratio = 17.0
@@ -668,18 +688,27 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
               angle_deg = math.degrees(road_angle_rad) * steer_ratio
               angle_deg = clip(angle_deg, -500.0, 500.0)
 
-              # Send angle control message
-              debug(f"MODE2 SENDING ANGLE: {angle_deg:.1f} deg")
+              # Send angle control message with handshake state
+              debug(f"MODE2 SENDING ANGLE: {angle_deg:.1f} deg (handshake ready)")
               can_sends.append(fordcan.create_angle_control_msg(
-                self.packer, self.CAN, angle_deg, CC.latActive
+                self.packer, self.CAN, angle_deg, CC.latActive, self.sapp_state, self.sapp_angle_req
               ))
               send_angle_instead = True
               apply_curvature = 0.0
             else:
-              # Fallback to physics mode if SAPP validation fails
+              # Send handshake message only (no angle request yet)
+              debug(f"MODE2 HANDSHAKING: state={self.sapp_state}, waiting for PSCM ready")
+              can_sends.append(fordcan.create_angle_control_msg(
+                self.packer, self.CAN, 0.0, False, self.sapp_state, self.sapp_angle_req
+              ))
+              # Fallback to physics mode while handshaking
               v_mps = max(CS.out.vEgoRaw, 0.1)
               physics_limit = 2.94 / (v_mps ** 2)
               curvature_max = min(physics_limit, 0.020)
+          else:
+            # Reset handshake when speed too high or PAM active
+            self.sapp_state = 0
+            self.sapp_angle_req = 0
         ########## TEST MODE LOGIC - END ##########
 
         # clip all values to max (use higher rate limit for test modes)

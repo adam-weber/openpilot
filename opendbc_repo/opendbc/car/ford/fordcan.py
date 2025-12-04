@@ -33,7 +33,7 @@ def calculate_lat_ctl2_checksum(mode: int, counter: int, dat: bytearray) -> int:
   return 0xFF - (checksum & 0xFF)
 
 
-def create_angle_control_msg(packer, CAN: CanBus, angle_deg: float, active: bool):
+def create_angle_control_msg(packer, CAN: CanBus, angle_deg: float, active: bool, apa_sys_stat: int = 0, angle_req: int = 0):
   """
   Creates a CAN message for Ford direct angle-based steering control.
 
@@ -41,10 +41,13 @@ def create_angle_control_msg(packer, CAN: CanBus, angle_deg: float, active: bool
   Frequency: 50Hz
 
   PSCM validates independently via SAPP feedback signals.
+  Requires handshake sequence:
+    - apa_sys_stat: 0=Null, 1=Off/Handshaking, 2=On/Active
+    - angle_req: 0=NoRequest, 1=Request
   """
   values = {
-    "ApaSys_D_Stat": 2 if active else 0,  # 2=On, 0=Null
-    "EPASExtAngleStatReq": 1 if active else 0,  # 1=Request, 0=NoRequest
+    "ApaSys_D_Stat": apa_sys_stat,
+    "EPASExtAngleStatReq": angle_req,
     "ExtSteeringAngleReq2": angle_deg if active else 0,  # Angle in degrees
   }
   return packer.make_can_msg("ParkAid_Data", CAN.main, values)
