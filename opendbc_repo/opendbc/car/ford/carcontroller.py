@@ -212,6 +212,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # SAPP handshake state machine for Mode 2 (angle control)
     self.sapp_state = 0  # 0=Null, 1=Handshaking, 2=Active
     self.sapp_angle_req = 0  # 0=NoRequest, 1=Request
+    self.angle_deg_last = 0.0  # Track last angle request for rate limiting
 
     # Track previous SAPP states for change detection logging
     self.sapp_handshake_last = 0
@@ -725,14 +726,19 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             # Only send angle commands if PSCM handshake is ready and all checks pass
             if self.sapp_state == 2 and CS.sapp_speed_ok and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
               # Convert curvature to steering wheel angle
+              # Use requested_curvature directly to avoid rate limit slowness
               wheelbase = 3.076  # Ford Maverick wheelbase in meters
               steer_ratio = 17.0
-              road_angle_rad = math.atan(apply_curvature * wheelbase)
+
+              # Use requested_curvature (not apply_curvature) to bypass slow rate limits
+              # PSCM has its own mechanical rate limits for angle control
+              angle_curvature = clip(requested_curvature, -0.035, 0.035)  # Clip to safe max
+              road_angle_rad = math.atan(angle_curvature * wheelbase)
               angle_deg = math.degrees(road_angle_rad) * steer_ratio
               angle_deg = clip(angle_deg, -500.0, 500.0)
 
               # Send angle control message with handshake state
-              debug(f"MODE2 SENDING ANGLE: {angle_deg:.1f} deg (handshake ready)")
+              debug(f"MODE2 SENDING ANGLE: {angle_deg:.1f} deg (curv_req={requested_curvature:.4f})")
               can_sends.append(fordcan.create_angle_control_msg(
                 self.packer, self.CAN, angle_deg, CC.latActive, self.sapp_state, self.sapp_angle_req
               ))
@@ -804,15 +810,46 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
             # Only send angle commands if blending logic says to AND PSCM is ready
             if use_angle_control and self.sapp_state == 2 and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
-              # Convert curvature to steering wheel angle
+              # Convert curvature to steering wheel angle (PhoenixPilot method)
+              # Use apply_curvature (already rate-limited) for smooth control
               wheelbase = 3.076  # Ford Maverick wheelbase in meters
               steer_ratio = 17.0
+
+              # PhoenixPilot-style conversion: simple atan formula
+              # Uses apply_curvature which is already smoothed by rate limits
               road_angle_rad = math.atan(apply_curvature * wheelbase)
-              angle_deg = math.degrees(road_angle_rad) * steer_ratio
+              angle_deg_raw = math.degrees(road_angle_rad) * steer_ratio
+
+              # PhoenixPilot-style asymmetric rate limiting
+              # Faster unwinding (back to center) than winding (into turn)
+              # Speed-dependent: tighter limits at high speed
+              if CS.out.vEgoRaw < 5.0:  # < 11 mph
+                angle_rate_lim_wind = 5.0    # deg/frame winding
+                angle_rate_lim_unwind = 5.0  # deg/frame unwinding
+              elif CS.out.vEgoRaw < 15.0:  # 11-33 mph
+                angle_rate_lim_wind = 0.8
+                angle_rate_lim_unwind = 3.5
+              else:  # > 33 mph
+                angle_rate_lim_wind = 0.15
+                angle_rate_lim_unwind = 0.4
+
+              # Check if unwinding (going back to center) or winding (into turn)
+              if self.angle_deg_last * angle_deg_raw > 0. and abs(angle_deg_raw) > abs(self.angle_deg_last):
+                # Same sign and increasing magnitude = winding into turn
+                angle_rate_lim = angle_rate_lim_wind
+              else:
+                # Unwinding back to center = faster rate
+                angle_rate_lim = angle_rate_lim_unwind
+
+              # Apply rate limit
+              angle_deg = clip(angle_deg_raw,
+                              self.angle_deg_last - angle_rate_lim,
+                              self.angle_deg_last + angle_rate_lim)
               angle_deg = clip(angle_deg, -500.0, 500.0)
+              self.angle_deg_last = angle_deg
 
               # Send angle control with handshake state
-              debug(f"MODE3 SENDING ANGLE: {angle_deg:.1f} deg at {v_mph:.1f}mph (blended angle mode)")
+              debug(f"MODE3 SENDING ANGLE: {angle_deg:.1f} deg (raw={angle_deg_raw:.1f}, lim={angle_rate_lim:.2f}) at {v_mph:.1f}mph")
               can_sends.append(fordcan.create_angle_control_msg(
                 self.packer, self.CAN, angle_deg, CC.latActive, self.sapp_state, self.sapp_angle_req
               ))
