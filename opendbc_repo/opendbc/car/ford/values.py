@@ -36,10 +36,11 @@ class CarControllerParams:
     #  however max curvature rate linearly decreases as speed increases:
     #  ~0.009 m^-1/sec at 7 m/s, ~0.002 m^-1/sec at 35 m/s
     # Limit to ~2 m/s^3 up, ~3.3 m/s^3 down at 75 mph and match EPS limit at low speed
+    # Extended to 0 m/s with aggressive low-speed rates for better parking/stop sign performance
     # ([5, 16.0, 25], [0.00045, 0.00025, 0.00010]),
     # ([5, 16.0, 25], [0.00045, 0.00025, 0.00015])
-    ([5, 16, 25], [0.0025, 0.0012, 0.00008]),
-    ([5, 16, 25], [0.0025, 0.0014, 0.00018])
+    ([0, 5, 16, 25], [0.005, 0.0025, 0.0012, 0.00008]),   # UP: Aggressive at 0 mph, conservative at highway
+    ([0, 5, 16, 25], [0.005, 0.0025, 0.0014, 0.00018])    # DOWN: Same aggressive low-speed response
   )
   CURVATURE_ERROR = 0.002  # ~6 degrees at 10 m/s, ~10 degrees at 35 m/s
 
