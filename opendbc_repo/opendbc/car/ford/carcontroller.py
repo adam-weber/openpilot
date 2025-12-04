@@ -55,9 +55,10 @@ def anti_overshoot(apply_curvature, apply_curvature_last, v_ego):
   return float(np.interp(v_ego, [5, 10], [apply_curvature, output_curvature]))
 
 
-def apply_ford_curvature_limits(apply_curvature, apply_curvature_last, current_curvature, v_ego_raw, steering_angle, lat_active, CP):
+def apply_ford_curvature_limits(apply_curvature, apply_curvature_last, current_curvature, v_ego_raw, steering_angle, lat_active, CP, bypass_error_limit=False):
   # No blending at low speed due to lack of torque wind-up and inaccurate current curvature
-  if v_ego_raw > 9:
+  # Test modes can bypass CURVATURE_ERROR limit to allow tighter turns
+  if v_ego_raw > 9 and not bypass_error_limit:
     apply_curvature = np.clip(apply_curvature, current_curvature - CarControllerParams.CURVATURE_ERROR,
                               current_curvature + CarControllerParams.CURVATURE_ERROR)
 
@@ -211,6 +212,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # SAPP handshake state machine for Mode 2 (angle control)
     self.sapp_state = 0  # 0=Null, 1=Handshaking, 2=Active
     self.sapp_angle_req = 0  # 0=NoRequest, 1=Request
+
+    # Track previous SAPP states for change detection logging
+    self.sapp_handshake_last = 0
+    self.sapp_speed_ok_last = True
+    self.sapp_signal_valid_last = True
+    self.sapp_can_reach_last = True
+    self.sapp_torque_ok_last = True
+    self.sapp_speed_at_transition = 0.0  # Track speed when SAPP conditions change
 
     # values from previous frame
     self.curvature_rate_last = 0.0
@@ -479,13 +488,17 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           requested_curvature = 0.0
 
         # apply curvature limits
+        # Bypass CURVATURE_ERROR limit for test modes below 20 mph to allow tight turns
+        # Above 20 mph, keep conservative limits for safety
+        bypass_limit = (CS.test_mode_active != 0) and (CS.out.vEgoRaw < 8.94)  # 20 mph = 8.94 m/s
         apply_curvature = apply_ford_curvature_limits(requested_curvature,
                                                                 self.apply_curvature_last,
                                                                 current_curvature,
                                                                 CS.out.vEgoRaw,
                                                                 0,
                                                                 CC.latActive,
-                                                                self.CP)
+                                                                self.CP,
+                                                                bypass_limit)
 
         #if reset_steering is 1, set apply_curvature to 0
         if reset_steering == 1:
@@ -661,7 +674,37 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
         # MODE 2: Direct angle control with SAPP handshake (only at low speeds)
         elif test_mode == 2:
-          debug(f"MODE2: v={CS.out.vEgoRaw:.2f}, max={self.angle_mode_max_speed:.2f}, pam={CS.pam_active}, handshake={CS.sapp_handshake}")
+          v_mph = CS.out.vEgoRaw * 2.23694  # Convert m/s to mph for logging
+          debug(f"MODE2: v={CS.out.vEgoRaw:.2f}m/s ({v_mph:.1f}mph), max={self.angle_mode_max_speed:.2f}, pam={CS.pam_active}, handshake={CS.sapp_handshake}")
+
+          # Detect and log SAPP signal state changes with speed threshold info
+          if CS.sapp_handshake != self.sapp_handshake_last:
+            debug(f"*** SAPP HANDSHAKE CHANGED: {self.sapp_handshake_last} → {CS.sapp_handshake} at {v_mph:.1f}mph ({CS.out.vEgoRaw:.2f}m/s)")
+            self.sapp_handshake_last = CS.sapp_handshake
+
+          if CS.sapp_speed_ok != self.sapp_speed_ok_last:
+            debug(f"*** SAPP SPEED_OK CHANGED: {self.sapp_speed_ok_last} → {CS.sapp_speed_ok} at {v_mph:.1f}mph ({CS.out.vEgoRaw:.2f}m/s)")
+            if not CS.sapp_speed_ok:
+              debug(f"*** PSCM SPEED LIMIT EXCEEDED! Max speed for angle control is below {v_mph:.1f}mph")
+            self.sapp_speed_ok_last = CS.sapp_speed_ok
+            self.sapp_speed_at_transition = CS.out.vEgoRaw
+
+          if CS.sapp_signal_valid != self.sapp_signal_valid_last:
+            debug(f"*** SAPP SIGNAL_VALID CHANGED: {self.sapp_signal_valid_last} → {CS.sapp_signal_valid} at {v_mph:.1f}mph")
+            self.sapp_signal_valid_last = CS.sapp_signal_valid
+
+          if CS.sapp_can_reach != self.sapp_can_reach_last:
+            debug(f"*** SAPP CAN_REACH CHANGED: {self.sapp_can_reach_last} → {CS.sapp_can_reach} at {v_mph:.1f}mph")
+            if not CS.sapp_can_reach:
+              debug(f"*** PSCM says requested angle CANNOT BE REACHED")
+            self.sapp_can_reach_last = CS.sapp_can_reach
+
+          if CS.sapp_torque_ok != self.sapp_torque_ok_last:
+            debug(f"*** SAPP TORQUE_OK CHANGED: {self.sapp_torque_ok_last} → {CS.sapp_torque_ok} at {v_mph:.1f}mph")
+            if not CS.sapp_torque_ok:
+              debug(f"*** DRIVER OVERRIDE DETECTED - torque threshold exceeded")
+            self.sapp_torque_ok_last = CS.sapp_torque_ok
+
           if CS.out.vEgoRaw < self.angle_mode_max_speed and not CS.pam_active:
             # SAPP handshake state machine (like PhoenixPilot)
             # PSCM responds via SAPPAngleControlStat1: 0=Closed, 1/2=Open/Ready, 3=Error
@@ -677,7 +720,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
               self.sapp_angle_req = 0
 
             debug(f"MODE2 SAPP: handshake={CS.sapp_handshake}, state={self.sapp_state}, req={self.sapp_angle_req}")
-            debug(f"MODE2 SAPP: speed={CS.sapp_speed_ok}, valid={CS.sapp_signal_valid}, reach={CS.sapp_can_reach}, torque={CS.sapp_torque_ok}")
+            debug(f"MODE2 SAPP: speed_ok={CS.sapp_speed_ok}, valid={CS.sapp_signal_valid}, reach={CS.sapp_can_reach}, torque_ok={CS.sapp_torque_ok}")
 
             # Only send angle commands if PSCM handshake is ready and all checks pass
             if self.sapp_state == 2 and CS.sapp_speed_ok and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
@@ -709,6 +752,113 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             # Reset handshake when speed too high or PAM active
             self.sapp_state = 0
             self.sapp_angle_req = 0
+
+        # MODE 3: Intelligent blending - Angle control with speed spoofing + automatic curvature fallback
+        elif test_mode == 3:
+          v_mph = CS.out.vEgoRaw * 2.23694
+          abs_curvature = abs(apply_curvature)
+
+          # Blending thresholds
+          HIGH_SPEED_THRESHOLD = 17.88  # 40 mph - prefer curvature above this
+          LOW_CURVATURE_THRESHOLD = 0.015  # Nearly straight - use curvature for better feel
+
+          # Decide whether to use angle control or curvature control
+          use_angle_control = False
+          blend_reason = "CURVATURE (default)"
+
+          # Use angle control only when beneficial:
+          # - Below 40 mph AND requesting significant steering
+          if CS.out.vEgoRaw < HIGH_SPEED_THRESHOLD and abs_curvature > LOW_CURVATURE_THRESHOLD:
+            use_angle_control = True
+            blend_reason = "ANGLE (tight turn)"
+          elif CS.out.vEgoRaw >= HIGH_SPEED_THRESHOLD:
+            blend_reason = f"CURVATURE (>{int(HIGH_SPEED_THRESHOLD * 2.23694)}mph)"
+          elif abs_curvature <= LOW_CURVATURE_THRESHOLD:
+            blend_reason = f"CURVATURE (straight, curv={abs_curvature:.4f})"
+
+          debug(f"MODE3: v={CS.out.vEgoRaw:.2f}m/s ({v_mph:.1f}mph), curv={apply_curvature:.4f}, mode={blend_reason}")
+
+          # Speed spoofing: Always send when in Mode 3 to keep PSCM ready
+          # Send speed spoof messages at 50Hz (every other frame at 100Hz)
+          if (self.frame % 2) == 0:
+            spoofed_speed = 0.0 if CC.latActive else CS.out.vEgoRaw
+            can_sends.append(fordcan.create_speed_spoof_msg(
+              self.packer, self.CAN, self.frame, spoofed_speed, CS.out.gearShifter
+            ))
+            can_sends.append(fordcan.create_speed_spoof_msg2(
+              self.packer, self.CAN, self.frame, spoofed_speed
+            ))
+
+          # SAPP handshake - maintain even when using curvature for quick switching
+          if not CS.pam_active:
+            if CS.sapp_handshake in [1, 2]:  # PSCM is ready
+              if CC.latActive and use_angle_control:
+                self.sapp_state = 2  # Active only when actually using angle
+                self.sapp_angle_req = 1
+              else:
+                self.sapp_state = 1  # Handshaking but not sending angles
+                self.sapp_angle_req = 0
+            else:
+              self.sapp_state = 1  # Initiate handshake
+              self.sapp_angle_req = 0
+
+            # Only send angle commands if blending logic says to AND PSCM is ready
+            if use_angle_control and self.sapp_state == 2 and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
+              # Convert curvature to steering wheel angle
+              wheelbase = 3.076  # Ford Maverick wheelbase in meters
+              steer_ratio = 17.0
+              road_angle_rad = math.atan(apply_curvature * wheelbase)
+              angle_deg = math.degrees(road_angle_rad) * steer_ratio
+              angle_deg = clip(angle_deg, -500.0, 500.0)
+
+              # Send angle control with handshake state
+              debug(f"MODE3 SENDING ANGLE: {angle_deg:.1f} deg at {v_mph:.1f}mph (blended angle mode)")
+              can_sends.append(fordcan.create_angle_control_msg(
+                self.packer, self.CAN, angle_deg, CC.latActive, self.sapp_state, self.sapp_angle_req
+              ))
+              send_angle_instead = True
+              apply_curvature = 0.0
+            else:
+              # Use curvature control - just send handshake to keep PSCM ready
+              if self.sapp_state > 0:  # Only if we initiated handshake
+                can_sends.append(fordcan.create_angle_control_msg(
+                  self.packer, self.CAN, 0.0, False, self.sapp_state, self.sapp_angle_req
+                ))
+              # apply_curvature stays as-is, will be sent via normal LKAS path
+              # No speed limits on curvature in Mode 3
+              debug(f"MODE3 USING CURVATURE: {apply_curvature:.4f} at {v_mph:.1f}mph (blended curvature mode)")
+          else:
+            # Reset when PAM active
+            self.sapp_state = 0
+            self.sapp_angle_req = 0
+
+        # MODE 4: Ultra-tight curvature beyond DBC limits (low speed only)
+        elif test_mode == 4:
+          v_mph = CS.out.vEgoRaw * 2.23694
+
+          # Speed-dependent ultra curvature - only at very low speeds for safety
+          if CS.out.vEgoRaw < 4.47:  # Below 10 mph (4.47 m/s)
+            # Ultra-tight turns: up to 0.035 curvature (beyond 0.020 DBC limit)
+            # This is ~83 degree steering wheel angle at 10 mph
+            v_mps = max(CS.out.vEgoRaw, 0.1)
+            physics_limit = 2.94 / (v_mps ** 2)
+            curvature_max = min(physics_limit, 0.035)  # Allow up to 0.035 (75% beyond DBC limit)
+            curvature_max = max(curvature_max, self.curvature_max_base)
+            debug(f"MODE4 ULTRA: v={v_mph:.1f}mph, curvature_max={curvature_max:.4f}, curv={apply_curvature:.4f}")
+          elif CS.out.vEgoRaw < 8.94:  # Below 20 mph
+            # Tight turns: up to 0.025 curvature (25% beyond DBC limit)
+            v_mps = max(CS.out.vEgoRaw, 0.1)
+            physics_limit = 2.94 / (v_mps ** 2)
+            curvature_max = min(physics_limit, 0.025)
+            curvature_max = max(curvature_max, self.curvature_max_base)
+            debug(f"MODE4 TIGHT: v={v_mph:.1f}mph, curvature_max={curvature_max:.4f}, curv={apply_curvature:.4f}")
+          else:
+            # Above 20 mph: Use physics mode limits (conservative)
+            v_mps = max(CS.out.vEgoRaw, 0.1)
+            physics_limit = 2.94 / (v_mps ** 2)
+            curvature_max = min(physics_limit, 0.020)
+            curvature_max = max(curvature_max, self.curvature_max_base)
+            debug(f"MODE4 NORMAL: v={v_mph:.1f}mph, curvature_max={curvature_max:.4f}, curv={apply_curvature:.4f}")
         ########## TEST MODE LOGIC - END ##########
 
         # clip all values to max (use higher rate limit for test modes)

@@ -41,7 +41,7 @@ class CarState(CarStateBase, MadsCarState):
     self.lc_button = 0
 
     # Test mode variables
-    self.test_mode_active = 0  # 0=OFF, 1=PHYSICS, 2=ANGLE
+    self.test_mode_active = 0  # 0=OFF, 1=PHYSICS, 2=ANGLE, 3=ANGLE+SPEED_SPOOF, 4=ULTRA_CURVATURE
     self.test_mode_button_count = 0
     self.test_mode_button_last_time = 0.0
     self.test_mode_beep_trigger = False  # Flag for controller to trigger beep
@@ -216,7 +216,7 @@ class CarState(CarStateBase, MadsCarState):
       self.test_mode_button_last_time = current_time
 
       if self.test_mode_button_count >= 3:
-        self.test_mode_active = (self.test_mode_active + 1) % 3
+        self.test_mode_active = (self.test_mode_active + 1) % 5  # Cycle through 0,1,2,3,4
         self.test_mode_button_count = 0
         self.test_mode_beep_trigger = True  # Trigger beep
         info(f"TEST MODE CHANGED TO: {self.test_mode_active}")  # Debug logging

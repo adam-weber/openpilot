@@ -53,6 +53,71 @@ def create_angle_control_msg(packer, CAN: CanBus, angle_deg: float, active: bool
   return packer.make_can_msg("ParkAid_Data", CAN.main, values)
 
 
+def fordchecksum(cnt: int, speed: float) -> int:
+  """
+  Calculate Ford speed message checksum.
+
+  Checksum is 256 - cnt - speed - 4 with bitwise shifting and rounding on the speed.
+  Used for EngVehicleSpThrottle2 and BrakeSysFeatures messages.
+  """
+  speed_int = int(round(speed / 0.01, 2))
+  top = speed_int >> 8
+  bottom = speed_int & 0xff
+  cs = 256 - cnt - top - bottom - 4
+  if cs < 0:
+    cs = cs + 256
+  return cs
+
+
+def create_speed_spoof_msg(packer, CAN: CanBus, frame: int, speed: float, gear_shifter: int, frame_step: int = 8):
+  """
+  Creates CAN message to spoof vehicle speed to PSCM for Mode 3 angle control.
+
+  Message: EngVehicleSpThrottle2 (0x204)
+  WARNING: This tells PSCM the vehicle is stopped to bypass speed limits for angle mode.
+  PhoenixPilot note: "This can cause a floating feel on the steering wheel."
+  """
+  if gear_shifter == 1:  # Reverse
+    reverse = 3
+    trailer = 1
+  else:
+    reverse = 1
+    trailer = 0
+
+  cnt = frame % frame_step
+  cs = fordchecksum(cnt, speed)
+
+  values = {
+    "VehVTrlrAid_B_Avail": trailer,
+    "VehVActlEng_No_Cs": cs,
+    "VehVActlEng_No_Cnt": cnt,
+    "VehVActlEng_D_Qf": 3,
+    "GearRvrse_D_Actl": reverse,
+    "Veh_V_ActlEng": speed,
+  }
+  return packer.make_can_msg("EngVehicleSpThrottle2", CAN.main, values)
+
+
+def create_speed_spoof_msg2(packer, CAN: CanBus, frame: int, speed: float, frame_step: int = 8):
+  """
+  Creates second CAN message to spoof brake system speed for Mode 3 angle control.
+
+  Message: BrakeSysFeatures (0x215)
+  WARNING: Spoofs speed on brake system bus to bypass PSCM speed validation.
+  """
+  cnt = frame % frame_step
+  cs = fordchecksum(cnt, speed)
+
+  values = {
+    "Veh_V_ActlBrk": speed,
+    "LsmcBrkDecel_D_Stat": 4,
+    "VehVActlBrk_No_Cs": cs,
+    "VehVActlBrk_No_Cnt": cnt,
+    "VehVActlBrk_D_Qf": 3,
+  }
+  return packer.make_can_msg("BrakeSysFeatures", CAN.main, values)
+
+
 def create_lka_msg(packer, CAN: CanBus, lat_active: bool, hud_control):
   """
   Creates an empty CAN message for the Ford LKA Command.
