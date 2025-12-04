@@ -730,10 +730,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
               wheelbase = 3.076  # Ford Maverick wheelbase in meters
               steer_ratio = 17.0
 
-              # Use requested_curvature (not apply_curvature) to bypass slow rate limits
+              # Use requested_curvature directly - no curvature clipping for angle mode!
               # PSCM has its own mechanical rate limits for angle control
-              angle_curvature = clip(requested_curvature, -0.035, 0.035)  # Clip to safe max
-              road_angle_rad = math.atan(angle_curvature * wheelbase)
+              # Only clip the final steering wheel angle to ±500 deg (near full lock)
+              road_angle_rad = math.atan(requested_curvature * wheelbase)
               angle_deg = math.degrees(road_angle_rad) * steer_ratio
               angle_deg = clip(angle_deg, -500.0, 500.0)
 
@@ -811,13 +811,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             # Only send angle commands if blending logic says to AND PSCM is ready
             if use_angle_control and self.sapp_state == 2 and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
               # Convert curvature to steering wheel angle (PhoenixPilot method)
-              # Use apply_curvature (already rate-limited) for smooth control
+              # Use requested_curvature directly - no curvature clipping for angle mode!
+              # This allows full vehicle turning capability (5.7m radius = 0.175 curvature)
               wheelbase = 3.076  # Ford Maverick wheelbase in meters
               steer_ratio = 17.0
 
               # PhoenixPilot-style conversion: simple atan formula
-              # Uses apply_curvature which is already smoothed by rate limits
-              road_angle_rad = math.atan(apply_curvature * wheelbase)
+              # Use raw requested_curvature to allow tight turns at stop signs/intersections
+              road_angle_rad = math.atan(requested_curvature * wheelbase)
               angle_deg_raw = math.degrees(road_angle_rad) * steer_ratio
 
               # PhoenixPilot-style asymmetric rate limiting
