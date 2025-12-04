@@ -39,8 +39,8 @@ class CarControllerParams:
     # Extended to 0 m/s with aggressive low-speed rates for better parking/stop sign performance
     # ([5, 16.0, 25], [0.00045, 0.00025, 0.00010]),
     # ([5, 16.0, 25], [0.00045, 0.00025, 0.00015])
-    ([0, 5, 16, 25], [0.005, 0.0025, 0.0012, 0.00008]),   # UP: Aggressive at 0 mph, conservative at highway
-    ([0, 5, 16, 25], [0.005, 0.0025, 0.0014, 0.00018])    # DOWN: Same aggressive low-speed response
+    ([0, 5, 16, 25], [0.005, 0.0025, 0.0012, 0.00008]),   # UP (winding): Aggressive at 0 mph, conservative at highway
+    ([0, 5, 16, 25], [0.020, 0.010, 0.0048, 0.00032])     # DOWN (unwinding): 4x faster for better straightening after curves
   )
   CURVATURE_ERROR = 0.002  # ~6 degrees at 10 m/s, ~10 degrees at 35 m/s
 
