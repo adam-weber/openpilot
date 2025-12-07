@@ -23,14 +23,14 @@ class CarControllerParams:
   ACC_UI_STEP = 20      # ACCDATA_3, 5Hz
   BUTTONS_STEP = 5      # Steering_Data_FD1, 10Hz, but send twice as fast
 
-  CURVATURE_MAX = 0.02  # Max curvature for steering command, m^-1
+  CURVATURE_MAX = 0.035  # Max curvature for steering command, m^-1 (increased from 0.02 for sharper turns)
   STEER_DRIVER_ALLOWANCE = 1.0  # Driver intervention threshold, Nm
 
 
   # ANGLE_RATE_LIMIT_UP = AngleRateLimit(speed_bp=[5, 25], angle_v=[0.0006, 0.0004]) # windup limit
   # ANGLE_RATE_LIMIT_DOWN = AngleRateLimit(speed_bp=[5, 25], angle_v=[0.0006, 0.0006]) # unwind limit
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    0.02,  # Max curvature for steering command, m^-1
+    0.035,  # Max curvature for steering command, m^-1 (increased from 0.02 for sharper turns)
     # Curvature rate limits
     # Max curvature is limited by the EPS to an equivalent of ~2.0 m/s^2 at all speeds,
     #  however max curvature rate linearly decreases as speed increases:
@@ -41,7 +41,7 @@ class CarControllerParams:
     ([5, 16, 25], [0.0025, 0.0012, 0.00008]),
     ([5, 16, 25], [0.0025, 0.0014, 0.00018])
   )
-  CURVATURE_ERROR = 0.002  # ~6 degrees at 10 m/s, ~10 degrees at 35 m/s
+  CURVATURE_ERROR = 0.004  # ~12 degrees at 10 m/s, ~20 degrees at 35 m/s (increased from 0.002 for sharper turns)
 
   ACCEL_MAX = 2.0               # m/s^2 max acceleration
   ACCEL_MIN = -3.5              # m/s^2 max deceleration

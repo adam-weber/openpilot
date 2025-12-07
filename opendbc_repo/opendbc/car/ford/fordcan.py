@@ -133,6 +133,133 @@ def create_lat_ctl2_msg(packer, CAN: CanBus, mode: int, ramp_type: int, precisio
   return packer.make_can_msg("LateralMotionControl2", CAN.main, values)
 
 
+def create_angle_control_msg(packer, CAN: CanBus, angle_deg: float, enabled: bool, sapp_state: int, sapp_angle_req: int):
+  """
+  Creates a CAN message for Ford angle control via ParkAid_Data (SAPP).
+
+  Args:
+    angle_deg: Desired steering wheel angle in degrees (-1000 to +1000)
+    enabled: Whether angle control is active
+    sapp_state: SAPP handshake state (0=inactive, 1=initializing, 2=active)
+    sapp_angle_req: Toggles 0/1 to indicate new angle request
+
+  Frequency is 50Hz (message ID 0x3A8).
+  """
+  values = {
+    "ExtSteeringAngleReq2": angle_deg,           # Steering angle in degrees
+    "EPASExtAngleStatReq": 1 if enabled else 0,  # Enable angle control
+    "ApaSys_D_Stat": sapp_state,                 # SAPP system state (handshake)
+    # All other signals default to 0/inactive
+    "SAPPStatusCoding": 0,
+    "ApaSteWhl_D_RqDrv": 0,
+    "ApaSteScanMde_D_Stat": 0,
+    "ApaSelSapp_D_Stat": 0,
+    "ApaSelPpa_D_Stat": 0,
+    "ApaSelPoa_D_Stat": 0,
+    "ApaScan_D_Stat": 0,
+    "ApaLongCtl_D_RqDrv": 0,
+    "ApaGearShif_D_RqDrv": 0,
+    "ApaActvSide2_D_Stat": 0,
+    "ApaAcsy_D_RqDrv": 0,
+    "ApaTrgtDist_D_Stat": 0,
+    "ApaMsgTxt_D_Rq": 0,
+    "ApaChime_D_Rq": 0,
+    "ApaButtnPrssd_B_Stat": 0,
+  }
+
+  return packer.make_can_msg("ParkAid_Data", CAN.main, values)
+
+
+def create_speed_spoof_msg(packer, CAN: CanBus, speed_kph: float, counter: int, gear_reverse: bool):
+  """
+  Creates spoofed speed message for EngVehicleSpThrottle2 (0x202).
+  Sent on camera bus (bus 2) to spoof PSCM into allowing angle control at higher speeds.
+
+  Args:
+    speed_kph: Spoofed vehicle speed in km/h (usually 0.0 for full spoofing)
+    counter: Message counter (0-15)
+    gear_reverse: True if in reverse gear
+
+  Frequency is 50Hz.
+  """
+  # Checksum calculation (simple sum)
+  cs = int((counter + (speed_kph * 100)) % 256)
+
+  values = {
+    "VehVTrlrAid_B_Avail": 1 if gear_reverse else 0,
+    "VehVActlEng_No_Cs": cs,
+    "VehVActlEng_No_Cnt": counter,
+    "Veh_V_RqCcSet": 0,
+    "VehVActlEng_D_Qf": 3,  # Quality factor: valid
+    "Veh_V_ActlEng": speed_kph,
+    "GearRvrse_D_Actl": 3 if gear_reverse else 1,
+    "StrtrMtrCtlMsgTxt_D2_Rq": 0,
+    "StrtrMtrCtlMsgTxt_D_Rq": 0,
+    "StrtrMtrDlyStrt_B_Stat": 0,
+  }
+
+  return packer.make_can_msg("EngVehicleSpThrottle2", CAN.cam, values)
+
+
+def create_brake_speed_spoof_msg(packer, CAN: CanBus, speed_kph: float, counter: int):
+  """
+  Creates spoofed speed message for BrakeSysFeatures (0x415).
+  Sent on camera bus (bus 2) to spoof PSCM into allowing angle control at higher speeds.
+
+  Args:
+    speed_kph: Spoofed vehicle speed in km/h (usually 0.0 for full spoofing)
+    counter: Message counter (0-15)
+
+  Frequency is 50Hz.
+  """
+  # Checksum calculation (simple sum)
+  cs = int((counter + (speed_kph * 100)) % 256)
+
+  values = {
+    "Veh_V_ActlBrk": speed_kph,
+    "LsmcBrkDecel_D_Stat": 0,
+    "VehVActlBrk_No_Cs": cs,
+    "VehVActlBrk_No_Cnt": counter,
+    "VehVActlBrk_D_Qf": 3,  # Quality factor: valid
+    "BrkFluidLvl_D_Stat": 0,
+    "VehYawLin_W_Rq": 0,
+    "VehYawNonLin_W_Rq": 0,
+    "VehStab_D_Stat": 0,
+  }
+
+  return packer.make_can_msg("BrakeSysFeatures", CAN.cam, values)
+
+
+def create_chime_msg(packer, CAN: CanBus, chime_level: int = 1):
+  """
+  Creates a chime message via ParkAid_Aud_Warn_Stat.
+
+  Args:
+    chime_level: 0=No_Chime, 1-15=Zone1-15_Chime (higher=louder/longer)
+  """
+  values = {
+    "RpaChime_D_Rq": chime_level,
+    "FpaChime_D_Rq": chime_level,
+    # All other signals default to 0/inactive
+    "SidePrkSnsR2_D_Stat": 0,
+    "SidePrkSnsR1_D_Stat": 0,
+    "SidePrkSnsL2_D_Stat": 0,
+    "ApaMde_D_Stat": 0,
+    "ApaActvSd_D_Actl": 0,
+    "PrkAidSwtch_B_Stat": 0,
+    "ApaMde_D_Avail": 0,
+    "PrkAidSnsFrCrnr_D_Stat": 0,
+    "PrkAidSnsFrCntr_D_Stat": 0,
+    "PrkAidSnsFlCrnr_D_Stat": 0,
+    "PrkAidSnsFlCntr_D_Stat": 0,
+    "PrkBrkEl_B_RqFap": 0,
+    "PrkAidMsgTxt_D_Rq": 0,
+    "SidePrkSnsL1_D_Stat": 0,
+    "PrkAidAudioMute_B_Rq": 0,
+  }
+  return packer.make_can_msg("ParkAid_Aud_Warn_Stat", CAN.main, values)
+
+
 def create_acc_msg(packer, CAN: CanBus, long_active: bool, gas: float, accel: float, stopping: bool, brake_request, v_ego_kph: float):
   """
   Creates a CAN message for the Ford ACC Command.

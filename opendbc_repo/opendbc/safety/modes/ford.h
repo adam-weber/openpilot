@@ -16,6 +16,8 @@
 #define FORD_LateralMotionControl  0x3D3U   // TX by OP, Lateral Control message
 #define FORD_LateralMotionControl2 0x3D6U   // TX by OP, alternate Lateral Control message
 #define FORD_IPMA_Data             0x3D8U   // TX by OP, IPMA and LKAS user interface
+#define FORD_ParkAid_Data          0x3A8U   // TX by OP, Angle Control (SAPP)
+#define FORD_ParkAid_Aud_Warn_Stat 0x3AAU   // TX by OP, Chime/Audio
 
 // CAN bus numbers.
 #define FORD_MAIN_BUS 0U
@@ -88,14 +90,17 @@ static bool ford_get_quality_flag_valid(const CANPacket_t *msg) {
 // #define FORD_CANFD_INACTIVE_CURVATURE_RATE 1024U
 
 // Control signal limits
-#define FORD_CURVATURE_MIN -0.012f
-#define FORD_CURVATURE_MAX 0.012f
+// Increased from 0.012 to 0.035 (DBC max) for tighter turns
+#define FORD_CURVATURE_MIN -0.035f
+#define FORD_CURVATURE_MAX 0.035f
 #define FORD_CURVATURE_RATE_MIN -0.001024f
 #define FORD_CURVATURE_RATE_MAX 0.00102375f
-#define FORD_PATH_OFFSET_MIN -1.0f
-#define FORD_PATH_OFFSET_MAX 1.0f
-#define FORD_PATH_ANGLE_MIN -0.25f
-#define FORD_PATH_ANGLE_MAX 0.25f
+// Increased from 1.0 to 2.0 for more lateral freedom (DBC max: ±5.11m)
+#define FORD_PATH_OFFSET_MIN -2.0f
+#define FORD_PATH_OFFSET_MAX 2.0f
+// Increased from 0.25 to 0.5 for sharper path angles (DBC max: 0.5235 rad)
+#define FORD_PATH_ANGLE_MIN -0.5f
+#define FORD_PATH_ANGLE_MAX 0.5f
 
 
 
@@ -644,6 +649,41 @@ static bool ford_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // Safety check for ParkAid_Data angle control (SAPP)
+  if (msg->addr == FORD_ParkAid_Data) {
+    // Signal: ExtSteeringAngleReq2 (bit 22, 15 bits, Motorola/big endian)
+    // Physical: (raw * 0.1) - 1000, range [-1000, 2276.5] degrees
+    // Bit 22 (MSB) down to bit 8 (LSB) = 7 bits in byte 2 + 8 bits in byte 1
+    unsigned int raw_angle = ((msg->data[2] & 0x7FU) << 8) | msg->data[1];
+
+    // Signal: EPASExtAngleStatReq (bit 23, enables angle control)
+    bool angle_control_enabled = (msg->data[2] >> 7) & 0x1U;
+
+    bool violation = false;
+
+    // Limit to ±1000 degrees for safety
+    // Raw 0 = -1000 deg, Raw 10000 = 0 deg, Raw 20000 = +1000 deg
+    unsigned int angle_min_raw = 0U;      // -1000 degrees
+    unsigned int angle_max_raw = 20000U;  // +1000 degrees
+    unsigned int angle_neutral_raw = 10000U;  // 0 degrees
+    violation |= (raw_angle < angle_min_raw) || (raw_angle > angle_max_raw);
+
+    // Ignore invalid value (32767)
+    violation |= (raw_angle == 32767U);
+
+    // Don't allow angle control when controls not allowed
+    violation |= angle_control_enabled && !controls_allowed;
+
+    // When angle control disabled, angle should be neutral (0 degrees = raw 10000)
+    if (!angle_control_enabled) {
+      violation |= (raw_angle != angle_neutral_raw);
+    }
+
+    if (violation) {
+      tx = false;
+    }
+  }
+
   return tx;
 }
 
@@ -670,6 +710,10 @@ static safety_config ford_init(uint16_t param) {
     {FORD_ACCDATA_3, 0, 8, .check_relay = true},          \
     {FORD_Lane_Assist_Data1, 0, 8, .check_relay = true},  \
     {FORD_IPMA_Data, 0, 8, .check_relay = true},          \
+    {FORD_ParkAid_Data, 0, 8, .check_relay = true},       \
+    {FORD_ParkAid_Aud_Warn_Stat, 0, 8, .check_relay = true}, \
+    {FORD_BrakeSysFeatures, 2, 8, .check_relay = false},  \
+    {FORD_EngVehicleSpThrottle2, 2, 8, .check_relay = false}, \
 
   static const CanMsg FORD_CANFD_LONG_TX_MSGS[] = {
     FORD_COMMON_TX_MSGS

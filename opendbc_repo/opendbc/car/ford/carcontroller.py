@@ -22,6 +22,7 @@ from opendbc.sunnypilot.car.ford.icbm import IntelligentCruiseButtonManagementIn
 
 LongCtrlState = structs.CarControl.Actuators.LongControlState
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
+GearShifter = structs.CarState.GearShifter
 
 def index_function(idx, max_val=192, max_idx=32):
   return (max_val) * ((idx/max_idx)**2)
@@ -112,6 +113,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.steering_wheel_delta_adjusted = 0.0
     self.last_button_frame = 0  # Track last ICBM button press frame
 
+    # Angle control (SAPP) variables for Mode 1
+    self.sapp_state = 0  # 0=inactive, 1=initializing, 2=active
+    self.sapp_angle_req = 0  # Toggles 0/1 to indicate new angle request
+    self.angle_deg_last = 0.0  # Track last angle for rate limiting
+    self.test_mode_last = 0  # Track previous test mode state for chime
+    self.chime_frames = 0  # How many frames to send chime
+
    ################################## lateral control parameters ##############################################
 
     # Variables to initialize (these get updated every scan as part of the control code)
@@ -195,10 +203,16 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.pswa_blend_ratio = 1.0
 
     # max absolute values for all four signals
-    self.path_angle_max = 0.5  # from dbc files
-    self.path_offset_max = 2.0  # too much path offset causes issues
-    self.curvature_max = 0.0115  # 0.02 is max from dbc files, but more than 0.012 can cause windup in big curves
-    self.curvature_rate_max = 0.001023  # from dbc files
+    self.path_angle_max = 0.5  # increased to 0.5 rad for sharper path angles (DBC max: 0.5235)
+    self.path_offset_max = 2.0  # increased to 2.0m for more lateral freedom (DBC max: 5.11)
+
+    # Physics-based curvature limits using lateral acceleration curve
+    # a_lat = v² × curvature, therefore curvature_max = a_lat_max / v²
+    self.curvature_min_speed = 11.2  # m/s (25 mph) - below this allow full tight turns
+    self.curvature_target_lat_accel = 4.4  # m/s² - comfortable lateral accel at higher speeds
+    self.curvature_absolute_max = 0.035  # DBC max, never exceed regardless of speed
+    self.curvature_max = 0.035  # will be updated per-frame based on speed
+    self.curvature_rate_max = 0.001023  # already at DBC max
 
     # values from previous frame
     self.curvature_rate_last = 0.0
@@ -631,6 +645,17 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if reset_steering == 1:
           path_angle = 0.0
 
+        # Physics-based curvature limit: a_lat = v² × curvature
+        # Below 25 mph: allow full tight turns (parking lots, tight corners)
+        # Above 25 mph: limit based on comfortable lateral acceleration
+        if CS.out.vEgoRaw < self.curvature_min_speed:
+          self.curvature_max = self.curvature_absolute_max  # Full tightness at low speeds
+        else:
+          # curvature = a_lat / v²
+          speed_squared = max(CS.out.vEgoRaw ** 2, self.curvature_min_speed ** 2)
+          self.curvature_max = min(self.curvature_absolute_max,
+                                   self.curvature_target_lat_accel / speed_squared)
+
         # clip all values to max.
         apply_curvature = clip(apply_curvature, -self.curvature_max, self.curvature_max)
         desired_curvature_rate = clip(desired_curvature_rate, -self.curvature_rate_max, self.curvature_rate_max)
@@ -686,7 +711,113 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # set lat_active to the value of CC.latActive
       lat_active = CC.latActive
 
-      if self.CP.flags & FordFlags.CANFD:
+      # Detect test mode activation and trigger chime
+      if CS.test_mode_active != self.test_mode_last:
+        if CS.test_mode_active == 1:
+          # Test mode activated, start chime for 10 frames (0.2 seconds at 50Hz)
+          self.chime_frames = 10
+          info("MODE1: Test mode activated - chime triggered")
+        else:
+          # Test mode deactivated
+          info("MODE1: Test mode deactivated")
+        self.test_mode_last = CS.test_mode_active
+
+      # Mode 1: Angle control with speed spoofing (PhoenixPilot-style)
+      send_angle_instead = False
+      if CS.test_mode_active == 1 and lat_active:
+        # SAPP handshake state machine
+        # State 0: Inactive
+        # State 1: Initializing (waiting for PSCM to respond)
+        # State 2: Active (can send angle commands)
+
+        # Check if we should enable SAPP
+        if self.sapp_state == 0:
+          # Not active yet, initiate handshake
+          self.sapp_state = 1
+          self.sapp_angle_req = 0
+          info("MODE1: Initiating SAPP handshake")
+
+        # Check PSCM feedback for handshake completion
+        if self.sapp_state == 1 and CS.sapp_angle_status == 2:
+          # PSCM acknowledged, move to active state
+          self.sapp_state = 2
+          info("MODE1: SAPP handshake complete, angle control active")
+
+        # Only send angle commands if PSCM is ready
+        if self.sapp_state == 2 and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
+          # PhoenixPilot-style angle conversion with asymmetric rate limiting
+          wheelbase = 3.076  # Ford Maverick wheelbase in meters
+          steer_ratio = 17.0
+
+          # Use apply_curvature (already rate-limited by software) for smooth control
+          road_angle_rad = math.atan(apply_curvature * wheelbase)
+          angle_deg_raw = math.degrees(road_angle_rad) * steer_ratio
+
+          # PhoenixPilot-style asymmetric rate limiting
+          # Faster unwinding (back to center) than winding (into turn)
+          if CS.out.vEgoRaw < 5.0:  # < 11 mph
+            angle_rate_lim_wind = 5.0    # deg/frame winding
+            angle_rate_lim_unwind = 5.0  # deg/frame unwinding
+          elif CS.out.vEgoRaw < 15.0:  # 11-33 mph
+            angle_rate_lim_wind = 0.8
+            angle_rate_lim_unwind = 3.5
+          else:  # > 33 mph
+            angle_rate_lim_wind = 0.15
+            angle_rate_lim_unwind = 0.4
+
+          # Check if unwinding (going back to center) or winding (into turn)
+          if self.angle_deg_last * angle_deg_raw > 0. and abs(angle_deg_raw) > abs(self.angle_deg_last):
+            # Same sign and increasing magnitude = winding into turn
+            angle_rate_lim = angle_rate_lim_wind
+          else:
+            # Unwinding back to center = faster rate
+            angle_rate_lim = angle_rate_lim_unwind
+
+          # Apply rate limit
+          angle_deg = clip(angle_deg_raw,
+                          self.angle_deg_last - angle_rate_lim,
+                          self.angle_deg_last + angle_rate_lim)
+          angle_deg = clip(angle_deg, -500.0, 500.0)
+          self.angle_deg_last = angle_deg
+
+          # Send angle control message
+          debug(f"MODE1 ANGLE: {angle_deg:.1f} deg (raw={angle_deg_raw:.1f}, lim={angle_rate_lim:.2f})")
+          can_sends.append(fordcan.create_angle_control_msg(
+            self.packer, self.CAN, angle_deg, True, self.sapp_state, self.sapp_angle_req
+          ))
+          send_angle_instead = True
+
+          # Speed spoofing (PhoenixPilot method):
+          # Send spoofed speed messages on camera bus (bus 2), which get relayed to main bus
+          # PSCM sees these instead of real speed from PCM/ABS
+          # This allows angle control at higher speeds
+          spoof_speed_kph = 0.0  # Spoof to 0 km/h for maximum range
+          speed_counter = (self.frame // CarControllerParams.STEER_STEP) % 16
+          gear_reverse = CS.out.gearShifter == GearShifter.reverse
+
+          can_sends.append(fordcan.create_speed_spoof_msg(
+            self.packer, self.CAN, spoof_speed_kph, speed_counter, gear_reverse
+          ))
+          can_sends.append(fordcan.create_brake_speed_spoof_msg(
+            self.packer, self.CAN, spoof_speed_kph, speed_counter
+          ))
+
+        else:
+          # Not ready yet, send neutral angle
+          debug(f"MODE1: SAPP not ready (state={self.sapp_state}, valid={CS.sapp_signal_valid}, reach={CS.sapp_can_reach}, torque={CS.sapp_torque_ok})")
+          can_sends.append(fordcan.create_angle_control_msg(
+            self.packer, self.CAN, 0.0, False, self.sapp_state, self.sapp_angle_req
+          ))
+
+      else:
+        # Test mode inactive or lat not active, reset SAPP state
+        if self.sapp_state != 0:
+          self.sapp_state = 0
+          self.angle_deg_last = 0.0
+          info("MODE1: SAPP deactivated")
+
+      # Send normal curvature control if not using angle mode
+      if not send_angle_instead and self.CP.flags & FordFlags.CANFD:
         # TODO: extended mode
         # Ford uses four individual signals to dictate how to drive to the car. Curvature alone (limited to 0.02m/s^2)
         # can actuate the steering for a large portion of any lateral movements. However, in order to get further control on
@@ -699,7 +830,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.packer, self.CAN, mode, ramp_type, self.precision_type, -path_offset, -path_angle,
           -apply_curvature, -desired_curvature_rate, counter
         ))
-      else:
+      elif not send_angle_instead:
         # Ford non-CANFD lateral control
         can_sends.append(fordcan.create_lat_ctl_msg(
           self.packer, self.CAN, lat_active, ramp_type, self.precision_type,
@@ -805,6 +936,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.steer_alert_last = steer_alert
     self.fcw_alert_last = fcw_alert
     self.lead_distance_bars_last = hud_control.leadDistanceBars
+
+    # Send chime when test mode is activated
+    if self.chime_frames > 0:
+      can_sends.append(fordcan.create_chime_msg(self.packer, self.CAN, chime_level=1))
+      self.chime_frames -= 1
 
     new_actuators = actuators.as_builder()
     new_actuators.torqueOutputCan = float(self.steer_warning)

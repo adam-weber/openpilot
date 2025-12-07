@@ -39,6 +39,17 @@ class CarState(CarStateBase, MadsCarState):
     self.distance_button = 0
     self.lc_button = 0
 
+    # Test mode variables (Mode 1 = Angle + Speed Spoof)
+    self.test_mode_active = 0  # 0=OFF, 1=ANGLE+SPEED_SPOOF
+    self.test_mode_button_count = 0
+    self.test_mode_button_last_time = 0.0
+
+    # SAPP (Semi-Autonomous Parallel Parking) feedback signals
+    self.sapp_angle_status = 0  # SAPPAngleControlStat1
+    self.sapp_signal_valid = False
+    self.sapp_can_reach = False
+    self.sapp_torque_ok = False
+
     # Save the HEV data available flag to a param
     self.params.put_bool("FordPrefHevDataAvailable", True if CP.flags & FordFlags.HEV_CLUSTER_DATA else False)
     self.params.put_bool("FordPrefHevBattDataAvailable", True if CP.flags & FordFlags.HEV_BATTERY_DATA else False)
@@ -101,6 +112,18 @@ class CarState(CarStateBase, MadsCarState):
     ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > CarControllerParams.STEER_DRIVER_ALLOWANCE, 5)
     ret.steerFaultTemporary = cp.vl["EPAS_INFO"]["EPAS_Failure"] == 1
     ret.steerFaultPermanent = cp.vl["EPAS_INFO"]["EPAS_Failure"] in (2, 3)
+
+    # SAPP (Semi-Autonomous Parallel Parking) angle control feedback
+    self.sapp_angle_status = cp.vl["EPAS_INFO"]["SAPPAngleControlStat1"]  # 0=inactive, 1=initializing, 2=active
+    # Stat2: 0=can reach, 1=cannot reach
+    # Stat3: 0=OK, 1=reverse gear engaged
+    # Stat4: 0=OK, 1=speed too high
+    # Stat5: 0=OK, 1=torque exceeded
+    # Stat6: 0=OK, 1=invalid angle request
+    self.sapp_signal_valid = cp.vl["EPAS_INFO"]["SAPPAngleControlStat3"] == 0  # Not in reverse
+    self.sapp_can_reach = cp.vl["EPAS_INFO"]["SAPPAngleControlStat2"] == 0     # Can reach angle
+    self.sapp_torque_ok = cp.vl["EPAS_INFO"]["SAPPAngleControlStat5"] == 0     # Torque not exceeded
+
     ret.espDisabled = cp.vl["Cluster_Info1_FD1"]["DrvSlipCtlMde_D_Rq"] != 0  # 0 is default mode
 
     if self.CP.flags & FordFlags.CANFD:
@@ -152,6 +175,26 @@ class CarState(CarStateBase, MadsCarState):
     prev_lc_button = self.lc_button
     self.distance_button = cp.vl["Steering_Data_FD1"]["AccButtnGapTogglePress"]
     self.lc_button = bool(cp.vl["Steering_Data_FD1"]["TjaButtnOnOffPress"])
+
+    # Triple-tap GAP button detection for test mode
+    # Detect rising edge (button just pressed)
+    if self.distance_button and not prev_distance_button:
+      current_time = ret.vEgoRaw / 100.0  # Use vEgo as rough timestamp
+      time_since_last = current_time - self.test_mode_button_last_time
+
+      # Reset counter if too much time passed (>2 seconds)
+      if time_since_last > 2.0:
+        self.test_mode_button_count = 1
+      else:
+        self.test_mode_button_count += 1
+
+      self.test_mode_button_last_time = current_time
+
+      # Toggle test mode on third tap
+      if self.test_mode_button_count >= 3:
+        self.test_mode_active = 1 if self.test_mode_active == 0 else 0
+        self.test_mode_button_count = 0
+        info(f"TEST MODE TOGGLED: {self.test_mode_active}")
 
     # lock info
     ret.doorOpen = any([cp.vl["BodyInfo_3_FD1"]["DrStatDrv_B_Actl"], cp.vl["BodyInfo_3_FD1"]["DrStatPsngr_B_Actl"],
