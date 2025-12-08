@@ -230,36 +230,6 @@ def create_brake_speed_spoof_msg(packer, CAN: CanBus, speed_kph: float, counter:
   return packer.make_can_msg("BrakeSysFeatures", CAN.cam, values)
 
 
-def create_chime_msg(packer, CAN: CanBus, chime_level: int = 1):
-  """
-  Creates a chime message via ParkAid_Aud_Warn_Stat.
-
-  Args:
-    chime_level: 0=No_Chime, 1-15=Zone1-15_Chime (higher=louder/longer)
-  """
-  values = {
-    "RpaChime_D_Rq": chime_level,
-    "FpaChime_D_Rq": chime_level,
-    # All other signals default to 0/inactive
-    "SidePrkSnsR2_D_Stat": 0,
-    "SidePrkSnsR1_D_Stat": 0,
-    "SidePrkSnsL2_D_Stat": 0,
-    "ApaMde_D_Stat": 0,
-    "ApaActvSd_D_Actl": 0,
-    "PrkAidSwtch_B_Stat": 0,
-    "ApaMde_D_Avail": 0,
-    "PrkAidSnsFrCrnr_D_Stat": 0,
-    "PrkAidSnsFrCntr_D_Stat": 0,
-    "PrkAidSnsFlCrnr_D_Stat": 0,
-    "PrkAidSnsFlCntr_D_Stat": 0,
-    "PrkBrkEl_B_RqFap": 0,
-    "PrkAidMsgTxt_D_Rq": 0,
-    "SidePrkSnsL1_D_Stat": 0,
-    "PrkAidAudioMute_B_Rq": 0,
-  }
-  return packer.make_can_msg("ParkAid_Aud_Warn_Stat", CAN.main, values)
-
-
 def create_acc_msg(packer, CAN: CanBus, long_active: bool, gas: float, accel: float, stopping: bool, brake_request, v_ego_kph: float):
   """
   Creates a CAN message for the Ford ACC Command.
@@ -289,7 +259,7 @@ def create_acc_msg(packer, CAN: CanBus, long_active: bool, gas: float, accel: fl
 
 
 def create_acc_ui_msg(packer, CAN: CanBus, CP, main_on: bool, enabled: bool, fcw_alert: bool, standstill: bool,
-                      hud_control, stock_values: dict, send_hands_free_msg: bool, send_ui: bool, send_bars: bool, tja_warn: int, tja_msg: int):
+                      hud_control, stock_values: dict, send_hands_free_msg: bool, send_ui: bool, send_bars: bool, tja_warn: int, tja_msg: int, test_mode_beep: bool = False):
   """
   Creates a CAN message for the Ford IPC adaptive cruise, forward collision warning and traffic jam
   assist status.
@@ -370,6 +340,10 @@ def create_acc_ui_msg(packer, CAN: CanBus, CP, main_on: bool, enabled: bool, fcw
   if fcw_alert:
     values["FcwVisblWarn_B_Rq"] = 1  # FCW visible alert
     values["FcwAudioWarn_B_Rq"] = 1  # FCW audio alert
+
+  # Test mode beep (Mode 1 activation)
+  if test_mode_beep:
+    values["FcwAudioWarn_B_Rq"] = 1  # Audio beep
 
   return packer.make_can_msg("ACCDATA_3", CAN.main, values)
 

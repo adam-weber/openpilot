@@ -117,8 +117,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.sapp_state = 0  # 0=inactive, 1=initializing, 2=active
     self.sapp_angle_req = 0  # Toggles 0/1 to indicate new angle request
     self.angle_deg_last = 0.0  # Track last angle for rate limiting
-    self.test_mode_last = 0  # Track previous test mode state for chime
-    self.chime_frames = 0  # How many frames to send chime
+    self.test_mode_last = 0  # Track previous test mode state for beep
 
    ################################## lateral control parameters ##############################################
 
@@ -656,6 +655,52 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.curvature_max = min(self.curvature_absolute_max,
                                    self.curvature_target_lat_accel / speed_squared)
 
+        # Anti-windup: Asymmetric rate limiting for curvature
+        # Faster unwinding (return to center) than winding (into turn) to prevent spiral
+        # Also reduce curvature when EPAS reports hitting limits
+        if CS.out.vEgoRaw < 5.0:  # < 11 mph
+          curv_rate_wind = 0.008      # 1/m per frame winding (into turn)
+          curv_rate_unwind = 0.008    # 1/m per frame unwinding (to center)
+        else:
+          # Normal driving: much faster unwinding to prevent spiral
+          # Non-CANFD needs aggressive unwinding since no EPAS feedback available
+          # Balance: fast enough to prevent spiral, slow enough to avoid oscillation
+          curv_rate_wind = 0.003      # Slower winding (more gradual turn entry)
+          curv_rate_unwind = 0.012 if not (self.CP.flags & FordFlags.CANFD) else 0.008  # 50% faster for non-CANFD
+
+        # Check if unwinding (going back to center) or winding (into turn)
+        # Unwinding: curvature magnitude is decreasing OR sign is changing
+        is_unwinding = (self.apply_curvature_last * apply_curvature > 0. and
+                       abs(apply_curvature) < abs(self.apply_curvature_last)) or \
+                       (self.apply_curvature_last * apply_curvature < 0.)
+
+        # Slow down unwinding near zero to prevent overshoot oscillation
+        # When within 0.01 of center, use slower rate
+        near_zero = abs(apply_curvature) < 0.01
+        if near_zero and is_unwinding:
+          curv_rate_unwind = min(curv_rate_unwind, 0.005)  # Gentler approach to center
+
+        # Apply asymmetric rate limit
+        curv_rate = curv_rate_unwind if is_unwinding else curv_rate_wind
+
+        # Log unwinding activity every 25 frames (0.5 seconds)
+        if self.frame % 25 == 0 and abs(apply_curvature) > 0.001:
+          info(f"CURVATURE: requested={apply_curvature:.4f}, last={self.apply_curvature_last:.4f}, "
+               f"unwinding={is_unwinding}, rate={curv_rate:.4f}, lat_lim={CS.lat_ctl_limit_status}")
+
+        apply_curvature = clip(apply_curvature,
+                              self.apply_curvature_last - curv_rate,
+                              self.apply_curvature_last + curv_rate)
+
+        # EPAS feedback anti-windup: reduce curvature if hitting limits
+        # lat_ctl_limit_status: 0=OK, 1=LimitClose, 2=LimitReached, 3=LimitWithDriver
+        if CS.lat_ctl_limit_status >= 1:  # Limit close or reached
+          # Reduce requested curvature magnitude by 20% to give EPAS headroom
+          apply_curvature *= 0.8
+          if CS.lat_ctl_limit_status >= 2:  # Limit actually reached
+            # More aggressive reduction if limit reached
+            apply_curvature *= 0.6
+
         # clip all values to max.
         apply_curvature = clip(apply_curvature, -self.curvature_max, self.curvature_max)
         desired_curvature_rate = clip(desired_curvature_rate, -self.curvature_rate_max, self.curvature_rate_max)
@@ -711,12 +756,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # set lat_active to the value of CC.latActive
       lat_active = CC.latActive
 
-      # Detect test mode activation and trigger chime
+      # Detect test mode activation and trigger beep
+      test_mode_beep = False
       if CS.test_mode_active != self.test_mode_last:
         if CS.test_mode_active == 1:
-          # Test mode activated, start chime for 10 frames (0.2 seconds at 50Hz)
-          self.chime_frames = 10
-          info("MODE1: Test mode activated - chime triggered")
+          # Test mode activated, trigger beep
+          test_mode_beep = True
+          info("MODE1: Test mode activated - beep triggered")
         else:
           # Test mode deactivated
           info("MODE1: Test mode deactivated")
@@ -738,19 +784,30 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           info("MODE1: Initiating SAPP handshake")
 
         # Check PSCM feedback for handshake completion
-        if self.sapp_state == 1 and CS.sapp_angle_status == 2:
-          # PSCM acknowledged, move to active state
-          self.sapp_state = 2
+        # sapp_handshake: 0=Closed, 1=Open/Ready, 2=Active, 3=Error
+        if CS.sapp_handshake in [1, 2]:  # PSCM is ready
+          if CC.latActive:
+            self.sapp_state = 2  # Active - send angle requests
+          else:
+            self.sapp_state = 1  # Handshaking but not steering
+        if self.sapp_state == 2:
           info("MODE1: SAPP handshake complete, angle control active")
 
+        # Log SAPP status every 50 frames (1 second at 50Hz)
+        if self.frame % 50 == 0:
+          info(f"MODE1 STATUS: state={self.sapp_state}, handshake={CS.sapp_handshake}, "
+               f"speed_ok={CS.sapp_speed_ok}, valid={CS.sapp_signal_valid}, can_reach={CS.sapp_can_reach}, torque_ok={CS.sapp_torque_ok}")
+
         # Only send angle commands if PSCM is ready
-        if self.sapp_state == 2 and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
+        if self.sapp_state == 2 and CS.sapp_speed_ok and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
           # PhoenixPilot-style angle conversion with asymmetric rate limiting
           wheelbase = 3.076  # Ford Maverick wheelbase in meters
           steer_ratio = 17.0
 
-          # Use apply_curvature (already rate-limited by software) for smooth control
-          road_angle_rad = math.atan(apply_curvature * wheelbase)
+          # Use requested_curvature directly (no rate limiting for angle mode!)
+          # PSCM has its own mechanical rate limits for angle control
+          # This allows full vehicle turning capability
+          road_angle_rad = math.atan(requested_curvature * wheelbase)
           angle_deg_raw = math.degrees(road_angle_rad) * steer_ratio
 
           # PhoenixPilot-style asymmetric rate limiting
@@ -778,10 +835,17 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
                           self.angle_deg_last - angle_rate_lim,
                           self.angle_deg_last + angle_rate_lim)
           angle_deg = clip(angle_deg, -500.0, 500.0)
+
+          # Log angle details every 10 frames (0.2 seconds)
+          if self.frame % 10 == 0:
+            rate_limited = abs(angle_deg - angle_deg_raw) > 0.01
+            info(f"MODE1 ANGLE: requested={angle_deg_raw:.1f}°, sending={angle_deg:.1f}°, "
+                 f"last={self.angle_deg_last:.1f}°, rate_lim={angle_rate_lim:.2f}°/frame, "
+                 f"LIMITED={rate_limited}, curv_req={requested_curvature:.4f}, speed={CS.out.vEgoRaw:.1f}m/s")
+
           self.angle_deg_last = angle_deg
 
           # Send angle control message
-          debug(f"MODE1 ANGLE: {angle_deg:.1f} deg (raw={angle_deg_raw:.1f}, lim={angle_rate_lim:.2f})")
           can_sends.append(fordcan.create_angle_control_msg(
             self.packer, self.CAN, angle_deg, True, self.sapp_state, self.sapp_angle_req
           ))
@@ -804,7 +868,20 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
         else:
           # Not ready yet, send neutral angle
-          debug(f"MODE1: SAPP not ready (state={self.sapp_state}, valid={CS.sapp_signal_valid}, reach={CS.sapp_can_reach}, torque={CS.sapp_torque_ok})")
+          # Log every 10 frames to see why we're blocked
+          if self.frame % 10 == 0:
+            reason = []
+            if self.sapp_state != 2:
+              reason.append(f"state={self.sapp_state}(need 2)")
+            if not CS.sapp_speed_ok:
+              reason.append("SPEED_TOO_HIGH")
+            if not CS.sapp_signal_valid:
+              reason.append("signal_invalid")
+            if not CS.sapp_can_reach:
+              reason.append("CANNOT_REACH_ANGLE")
+            if not CS.sapp_torque_ok:
+              reason.append("TORQUE_EXCEEDED")
+            info(f"MODE1 BLOCKED: {', '.join(reason)} (handshake={CS.sapp_handshake})")
           can_sends.append(fordcan.create_angle_control_msg(
             self.packer, self.CAN, 0.0, False, self.sapp_state, self.sapp_angle_req
           ))
@@ -887,6 +964,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       self.accel_pitch_compensated = accel_pitch_compensated
 
     ### ui ###
+    # Test mode beep defaults to False, set to True when Mode 1 activates
+    if 'test_mode_beep' not in locals():
+      test_mode_beep = False
+
     send_ui = (self.main_on_last != main_on) or (self.lkas_enabled_last != CC.latActive) or (self.steer_alert_last != steer_alert)
     # send lkas ui msg at 1Hz or if ui state changes
     if (self.frame % CarControllerParams.LKAS_UI_STEP) == 0 or send_ui:
@@ -926,6 +1007,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           send_bars,
           self.tja_warn,
           self.tja_msg,
+          test_mode_beep,
         )
       )
 
@@ -936,11 +1018,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.steer_alert_last = steer_alert
     self.fcw_alert_last = fcw_alert
     self.lead_distance_bars_last = hud_control.leadDistanceBars
-
-    # Send chime when test mode is activated
-    if self.chime_frames > 0:
-      can_sends.append(fordcan.create_chime_msg(self.packer, self.CAN, chime_level=1))
-      self.chime_frames -= 1
 
     new_actuators = actuators.as_builder()
     new_actuators.torqueOutputCan = float(self.steer_warning)

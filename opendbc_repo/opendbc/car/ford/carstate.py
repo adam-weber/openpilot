@@ -45,10 +45,15 @@ class CarState(CarStateBase, MadsCarState):
     self.test_mode_button_last_time = 0.0
 
     # SAPP (Semi-Autonomous Parallel Parking) feedback signals
-    self.sapp_angle_status = 0  # SAPPAngleControlStat1
-    self.sapp_signal_valid = False
-    self.sapp_can_reach = False
-    self.sapp_torque_ok = False
+    self.sapp_handshake = 0  # SAPPAngleControlStat1: 0=Closed, 1=Open/Ready, 2=Active, 3=Error
+    self.sapp_speed_ok = True
+    self.sapp_signal_valid = True  # Optimistic defaults - assume OK until EPAS says otherwise
+    self.sapp_can_reach = True
+
+    # EPAS lateral control limit feedback (anti-windup for default curvature mode)
+    # 0=LimitNotReached, 1=LimitClose, 2=LimitReached, 3=LimitWithDriverActive
+    self.lat_ctl_limit_status = 0
+    self.sapp_torque_ok = True  # Optimistic default
 
     # Save the HEV data available flag to a param
     self.params.put_bool("FordPrefHevDataAvailable", True if CP.flags & FordFlags.HEV_CLUSTER_DATA else False)
@@ -114,14 +119,17 @@ class CarState(CarStateBase, MadsCarState):
     ret.steerFaultPermanent = cp.vl["EPAS_INFO"]["EPAS_Failure"] in (2, 3)
 
     # SAPP (Semi-Autonomous Parallel Parking) angle control feedback
-    self.sapp_angle_status = cp.vl["EPAS_INFO"]["SAPPAngleControlStat1"]  # 0=inactive, 1=initializing, 2=active
+    # SAPP handshake state from PSCM (SAPPAngleControlStat1)
+    # 0=Closed/Init, 1=Open/Ready, 2=Active, 3=Error/Lost
+    self.sapp_handshake = cp.vl["EPAS_INFO"]["SAPPAngleControlStat1"]
     # Stat2: 0=can reach, 1=cannot reach
     # Stat3: 0=OK, 1=reverse gear engaged
     # Stat4: 0=OK, 1=speed too high
     # Stat5: 0=OK, 1=torque exceeded
-    # Stat6: 0=OK, 1=invalid angle request
+    # Stat6: 0=OK, 1=angle cannot be reached (CORRECT signal per ford-test-modes)
+    self.sapp_speed_ok = cp.vl["EPAS_INFO"]["SAPPAngleControlStat4"] == 0      # Speed OK
     self.sapp_signal_valid = cp.vl["EPAS_INFO"]["SAPPAngleControlStat3"] == 0  # Not in reverse
-    self.sapp_can_reach = cp.vl["EPAS_INFO"]["SAPPAngleControlStat2"] == 0     # Can reach angle
+    self.sapp_can_reach = cp.vl["EPAS_INFO"]["SAPPAngleControlStat6"] == 0     # Can reach angle (FIXED from Stat2!)
     self.sapp_torque_ok = cp.vl["EPAS_INFO"]["SAPPAngleControlStat5"] == 0     # Torque not exceeded
 
     ret.espDisabled = cp.vl["Cluster_Info1_FD1"]["DrvSlipCtlMde_D_Rq"] != 0  # 0 is default mode
@@ -129,6 +137,9 @@ class CarState(CarStateBase, MadsCarState):
     if self.CP.flags & FordFlags.CANFD:
       # this signal is always 0 on non-CAN FD cars
       ret.steerFaultTemporary |= cp.vl["Lane_Assist_Data3_FD1"]["LatCtlSte_D_Stat"] not in (1, 2, 3)
+      # Read EPAS lateral control limit status for anti-windup feedback
+      # 0=LimitNotReached, 1=LimitClose, 2=LimitReached, 3=LimitWithDriverActive
+      self.lat_ctl_limit_status = cp.vl["Lane_Assist_Data3_FD1"]["LatCtlLim_D_Stat"]
 
     # cruise state
     is_metric = cp.vl["INSTRUMENT_PANEL"]["METRIC_UNITS"] == 1 if not self.CP.flags & FordFlags.CANFD else cp_cam.vl["IPMA_Data2"]["IsaVLimUnit_D_Rq"] == 1
