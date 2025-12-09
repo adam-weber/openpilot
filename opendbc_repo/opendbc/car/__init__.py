@@ -1,5 +1,6 @@
 # functions common among cars
 import numpy as np
+from collections import namedtuple
 from dataclasses import dataclass, field
 from enum import IntFlag, ReprEnum, StrEnum, EnumType, auto
 from dataclasses import replace
@@ -7,6 +8,9 @@ from dataclasses import replace
 from opendbc.car import structs, uds
 from opendbc.car.can_definitions import CanData
 from opendbc.car.docs_definitions import CarDocs, ExtraCarDocs
+
+# Angle rate limit definition for angle-based steering control
+AngleRateLimit = namedtuple('AngleRateLimit', ['speed_bp', 'angle_v'])
 
 DT_CTRL = 0.01  # car state and control loop timestep (s)
 

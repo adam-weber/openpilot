@@ -828,11 +828,19 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           # Use planner's steering angle directly (don't recalculate from curvature)
           apply_angle = actuators.steeringAngleDeg * smooth_factor
 
-          # Apply rate limiting using openpilot's standard function
-          # Uses pigpilot's more conservative rate limits
-          from selfdrive.car import apply_std_steer_angle_limits
-          apply_angle = apply_std_steer_angle_limits(apply_angle, self.angle_deg_last,
-                                                      CS.out.vEgo, CarControllerParams)
+          # Apply rate limiting - asymmetric (faster unwind than wind)
+          # Determine if winding (into turn) or unwinding (back to center)
+          steer_up = self.angle_deg_last * apply_angle >= 0. and abs(apply_angle) > abs(self.angle_deg_last)
+          rate_limits = CarControllerParams.ANGLE_RATE_LIMIT_UP if steer_up else CarControllerParams.ANGLE_RATE_LIMIT_DOWN
+
+          # Interpolate rate limit based on speed
+          angle_rate_lim = np.interp(CS.out.vEgo, rate_limits.speed_bp, rate_limits.angle_v)
+
+          # Apply rate limit (deg/s to deg/frame at 50Hz)
+          angle_rate_lim_frame = angle_rate_lim / 50.0
+          apply_angle = clip(apply_angle,
+                            self.angle_deg_last - angle_rate_lim_frame,
+                            self.angle_deg_last + angle_rate_lim_frame)
 
           # Log angle details every 10 frames (0.2 seconds)
           if self.frame % 10 == 0:
