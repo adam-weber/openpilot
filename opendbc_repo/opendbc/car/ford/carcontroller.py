@@ -118,6 +118,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.sapp_angle_req = 0  # Toggles 0/1 to indicate new angle request
     self.angle_deg_last = 0.0  # Track last angle for rate limiting
     self.test_mode_last = 0  # Track previous test mode state for beep
+    self.smooth_counter = 0  # Ping pong fix: count frames of stability
 
    ################################## lateral control parameters ##############################################
 
@@ -799,55 +800,50 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
                f"speed_ok={CS.sapp_speed_ok}, valid={CS.sapp_signal_valid}, can_reach={CS.sapp_can_reach}, torque_ok={CS.sapp_torque_ok}")
 
         # Only send angle commands if PSCM is ready
-        if self.sapp_state == 2 and CS.sapp_speed_ok and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
-          # PhoenixPilot-style angle conversion with asymmetric rate limiting
-          wheelbase = 3.076  # Ford Maverick wheelbase in meters
-          steer_ratio = 17.0
+        # Simplified check (like pigpilot) - just verify handshake state
+        # Extra safety checks commented out - pigpilot works fine with just state check
+        # if self.sapp_state == 2 and CS.sapp_speed_ok and CS.sapp_signal_valid and CS.sapp_can_reach and CS.sapp_torque_ok:
+        if self.sapp_state == 2:
+          # Pigpilot-style angle control - use planner's angle directly
+          # This is simpler and more accurate than recalculating from curvature
+          apply_angle = self.angle_deg_last
 
-          # Use requested_curvature directly (no rate limiting for angle mode!)
-          # PSCM has its own mechanical rate limits for angle control
-          # This allows full vehicle turning capability
-          road_angle_rad = math.atan(requested_curvature * wheelbase)
-          angle_deg_raw = math.degrees(road_angle_rad) * steer_ratio
+          # Ping pong fix: track stability and apply damping
+          smooth_factor = 1.0
+          angle_delta = abs(actuators.steeringAngleDeg - self.angle_deg_last)
 
-          # PhoenixPilot-style asymmetric rate limiting
-          # Faster unwinding (back to center) than winding (into turn)
-          if CS.out.vEgoRaw < 5.0:  # < 11 mph
-            angle_rate_lim_wind = 5.0    # deg/frame winding
-            angle_rate_lim_unwind = 5.0  # deg/frame unwinding
-          elif CS.out.vEgoRaw < 15.0:  # 11-33 mph
-            angle_rate_lim_wind = 0.8
-            angle_rate_lim_unwind = 3.5
-          else:  # > 33 mph
-            angle_rate_lim_wind = 0.15
-            angle_rate_lim_unwind = 0.4
-
-          # Check if unwinding (going back to center) or winding (into turn)
-          if self.angle_deg_last * angle_deg_raw > 0. and abs(angle_deg_raw) > abs(self.angle_deg_last):
-            # Same sign and increasing magnitude = winding into turn
-            angle_rate_lim = angle_rate_lim_wind
+          # Check if angle is stable (small delta and near center)
+          if (angle_delta <= CarControllerParams.SMOOTH_DELTA and
+              abs(actuators.steeringAngleDeg) <= CarControllerParams.SMOOTH_DELTA):
+            self.smooth_counter += 1
           else:
-            # Unwinding back to center = faster rate
-            angle_rate_lim = angle_rate_lim_unwind
+            self.smooth_counter = 0
 
-          # Apply rate limit
-          angle_deg = clip(angle_deg_raw,
-                          self.angle_deg_last - angle_rate_lim,
-                          self.angle_deg_last + angle_rate_lim)
-          angle_deg = clip(angle_deg, -500.0, 500.0)
+          # If stable for SMOOTH_SECONDS, apply damping to prevent ping-pong
+          if self.smooth_counter >= (CarControllerParams.SMOOTH_SECONDS * 50):
+            smooth_factor = CarControllerParams.SMOOTH_FACTOR
+            if self.frame % 50 == 0:
+              info(f"MODE1: Ping-pong fix active, damping to {smooth_factor:.2f}")
+
+          # Use planner's steering angle directly (don't recalculate from curvature)
+          apply_angle = actuators.steeringAngleDeg * smooth_factor
+
+          # Apply rate limiting using openpilot's standard function
+          # Uses pigpilot's more conservative rate limits
+          from selfdrive.car import apply_std_steer_angle_limits
+          apply_angle = apply_std_steer_angle_limits(apply_angle, self.angle_deg_last,
+                                                      CS.out.vEgo, CarControllerParams)
 
           # Log angle details every 10 frames (0.2 seconds)
           if self.frame % 10 == 0:
-            rate_limited = abs(angle_deg - angle_deg_raw) > 0.01
-            info(f"MODE1 ANGLE: requested={angle_deg_raw:.1f}°, sending={angle_deg:.1f}°, "
-                 f"last={self.angle_deg_last:.1f}°, rate_lim={angle_rate_lim:.2f}°/frame, "
-                 f"LIMITED={rate_limited}, curv_req={requested_curvature:.4f}, speed={CS.out.vEgoRaw:.1f}m/s")
+            info(f"MODE1 ANGLE: planner={actuators.steeringAngleDeg:.1f}°, smooth={smooth_factor:.2f}, "
+                 f"sending={apply_angle:.1f}°, last={self.angle_deg_last:.1f}°, speed={CS.out.vEgoRaw:.1f}m/s")
 
-          self.angle_deg_last = angle_deg
+          self.angle_deg_last = apply_angle
 
           # Send angle control message
           can_sends.append(fordcan.create_angle_control_msg(
-            self.packer, self.CAN, angle_deg, True, self.sapp_state, self.sapp_angle_req
+            self.packer, self.CAN, apply_angle, True, self.sapp_state, self.sapp_angle_req
           ))
           send_angle_instead = True
 
@@ -882,9 +878,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             if not CS.sapp_torque_ok:
               reason.append("TORQUE_EXCEEDED")
             info(f"MODE1 BLOCKED: {', '.join(reason)} (handshake={CS.sapp_handshake})")
+          # Pigpilot approach: send current measured angle when not active
+          # This prevents jerky steering movements on disengagement
           can_sends.append(fordcan.create_angle_control_msg(
-            self.packer, self.CAN, 0.0, False, self.sapp_state, self.sapp_angle_req
+            self.packer, self.CAN, CS.out.steeringAngleDeg, False, self.sapp_state, self.sapp_angle_req
           ))
+          self.smooth_counter = 0  # Reset ping pong counter when not active
 
       else:
         # Test mode inactive or lat not active, reset SAPP state

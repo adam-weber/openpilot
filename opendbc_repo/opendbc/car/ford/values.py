@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field, replace
 from enum import Enum, IntFlag
 
-from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds
+from opendbc.car import AngleRateLimit, Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds
 from opendbc.car.lateral import AngleSteeringLimits
 from opendbc.car.structs import CarParams
 from opendbc.car.docs_definitions import CarFootnote, CarHarness, CarDocs, CarParts, Column, \
@@ -42,6 +42,16 @@ class CarControllerParams:
     ([5, 16, 25], [0.0025, 0.0014, 0.00018])
   )
   CURVATURE_ERROR = 0.004  # ~12 degrees at 10 m/s, ~20 degrees at 35 m/s (increased from 0.002 for sharper turns)
+
+  # Ping pong fix (from pigpilot) - prevents oscillation when centered
+  SMOOTH_DELTA = 3        # Max angle delta (degrees) to consider "stable"
+  SMOOTH_FACTOR = 0.65    # Apply 35% damping when stable
+  SMOOTH_SECONDS = 5      # Seconds of stability before applying damping
+
+  # Pigpilot angle rate limits (deg/second) - MUCH more conservative than our previous implementation
+  # These are used by apply_std_steer_angle_limits() for Mode 1 SAPP control
+  ANGLE_RATE_LIMIT_UP = AngleRateLimit(speed_bp=[0.0, 15.0, 30.0], angle_v=[7.5, 1.0, 0.1])
+  ANGLE_RATE_LIMIT_DOWN = AngleRateLimit(speed_bp=[0.0, 15.0, 30.0], angle_v=[7.5, 2.0, 0.2])
 
   ACCEL_MAX = 2.0               # m/s^2 max acceleration
   ACCEL_MIN = -3.5              # m/s^2 max deceleration
