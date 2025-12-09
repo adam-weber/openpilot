@@ -48,10 +48,12 @@ class CarControllerParams:
   SMOOTH_FACTOR = 0.65    # Apply 35% damping when stable
   SMOOTH_SECONDS = 5      # Seconds of stability before applying damping
 
-  # Pigpilot angle rate limits (deg/second) - MUCH more conservative than our previous implementation
+  # Mode 1 angle rate limits (deg/second) - Faster rates for responsive street driving
+  # Pigpilot's rates (7.5 → 0.1°/s) were too slow for normal turns
+  # Our original rates with ping-pong fix should prevent oscillation while staying responsive
   # These are used by apply_std_steer_angle_limits() for Mode 1 SAPP control
-  ANGLE_RATE_LIMIT_UP = AngleRateLimit(speed_bp=[0.0, 15.0, 30.0], angle_v=[7.5, 1.0, 0.1])
-  ANGLE_RATE_LIMIT_DOWN = AngleRateLimit(speed_bp=[0.0, 15.0, 30.0], angle_v=[7.5, 2.0, 0.2])
+  ANGLE_RATE_LIMIT_UP = AngleRateLimit(speed_bp=[0.0, 5.0, 15.0], angle_v=[250.0, 40.0, 7.5])
+  ANGLE_RATE_LIMIT_DOWN = AngleRateLimit(speed_bp=[0.0, 5.0, 15.0], angle_v=[250.0, 175.0, 20.0])
 
   ACCEL_MAX = 2.0               # m/s^2 max acceleration
   ACCEL_MIN = -3.5              # m/s^2 max deceleration
