@@ -4,6 +4,7 @@ import numpy as np
 from numpy import clip, interp
 from collections import deque
 from common.filter_simple import FirstOrderFilter
+from common.swaglog import cloudlog
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, apply_hysteresis, structs
 from opendbc.car.lateral import ISO_LATERAL_ACCEL, apply_std_steer_angle_limits
@@ -763,10 +764,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if CS.test_mode_active == 1:
           # Test mode activated, trigger beep
           test_mode_beep = True
-          info("MODE1: Test mode activated - beep triggered")
+          cloudlog.info("MODE1: Test mode activated - beep triggered")
         else:
           # Test mode deactivated
-          info("MODE1: Test mode deactivated")
+          cloudlog.info("MODE1: Test mode deactivated")
         self.test_mode_last = CS.test_mode_active
 
       # Mode 1: Angle control with speed spoofing (PhoenixPilot-style)
@@ -782,7 +783,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           # Not active yet, initiate handshake
           self.sapp_state = 1
           self.sapp_angle_req = 0
-          info("MODE1: Initiating SAPP handshake")
+          cloudlog.info("MODE1: Initiating SAPP handshake")
 
         # Check PSCM feedback for handshake completion
         # sapp_handshake: 0=Closed, 1=Open/Ready, 2=Active, 3=Error
@@ -792,12 +793,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           else:
             self.sapp_state = 1  # Handshaking but not steering
         if self.sapp_state == 2:
-          info("MODE1: SAPP handshake complete, angle control active")
+          cloudlog.info("MODE1: SAPP handshake complete, angle control active")
 
         # Log SAPP status every 50 frames (1 second at 50Hz)
         if self.frame % 50 == 0:
-          info(f"MODE1 STATUS: state={self.sapp_state}, handshake={CS.sapp_handshake}, "
-               f"speed_ok={CS.sapp_speed_ok}, valid={CS.sapp_signal_valid}, can_reach={CS.sapp_can_reach}, torque_ok={CS.sapp_torque_ok}")
+          cloudlog.info(f"MODE1 STATUS: state={self.sapp_state}, handshake={CS.sapp_handshake}, "
+                        f"speed_ok={CS.sapp_speed_ok}, valid={CS.sapp_signal_valid}, can_reach={CS.sapp_can_reach}, torque_ok={CS.sapp_torque_ok}")
 
         # Only send angle commands if PSCM is ready
         # Simplified check (like pigpilot) - just verify handshake state
@@ -823,7 +824,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           if self.smooth_counter >= (CarControllerParams.SMOOTH_SECONDS * 50):
             smooth_factor = CarControllerParams.SMOOTH_FACTOR
             if self.frame % 50 == 0:
-              info(f"MODE1: Ping-pong fix active, damping to {smooth_factor:.2f}")
+              cloudlog.info(f"MODE1: Ping-pong fix active, damping to {smooth_factor:.2f}")
 
           # Use planner's steering angle directly (don't recalculate from curvature)
           apply_angle = actuators.steeringAngleDeg * smooth_factor
@@ -844,8 +845,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
           # Log angle details every 10 frames (0.2 seconds)
           if self.frame % 10 == 0:
-            info(f"MODE1 ANGLE: planner={actuators.steeringAngleDeg:.1f}°, smooth={smooth_factor:.2f}, "
-                 f"sending={apply_angle:.1f}°, last={self.angle_deg_last:.1f}°, speed={CS.out.vEgoRaw:.1f}m/s")
+            rate_limited = abs(apply_angle - (actuators.steeringAngleDeg * smooth_factor)) > 0.1
+            cloudlog.info(f"MODE1 ANGLE: planner={actuators.steeringAngleDeg:.1f}°, smooth={smooth_factor:.2f}, "
+                          f"after_smooth={actuators.steeringAngleDeg * smooth_factor:.1f}°, "
+                          f"sending={apply_angle:.1f}°, last={self.angle_deg_last:.1f}°, "
+                          f"rate_lim={angle_rate_lim:.1f}°/s, RATE_LIMITED={rate_limited}, speed={CS.out.vEgoRaw:.1f}m/s")
 
           self.angle_deg_last = apply_angle
 
@@ -885,7 +889,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
               reason.append("CANNOT_REACH_ANGLE")
             if not CS.sapp_torque_ok:
               reason.append("TORQUE_EXCEEDED")
-            info(f"MODE1 BLOCKED: {', '.join(reason)} (handshake={CS.sapp_handshake})")
+            cloudlog.info(f"MODE1 BLOCKED: {', '.join(reason)} (handshake={CS.sapp_handshake})")
           # Pigpilot approach: send current measured angle when not active
           # This prevents jerky steering movements on disengagement
           can_sends.append(fordcan.create_angle_control_msg(
@@ -898,7 +902,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if self.sapp_state != 0:
           self.sapp_state = 0
           self.angle_deg_last = 0.0
-          info("MODE1: SAPP deactivated")
+          cloudlog.info("MODE1: SAPP deactivated")
 
       # Send normal curvature control if not using angle mode
       if not send_angle_instead and self.CP.flags & FordFlags.CANFD:

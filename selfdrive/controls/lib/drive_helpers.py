@@ -9,9 +9,9 @@ CAR_ROTATION_RADIUS = 0.0
 MAX_CURVATURE = 0.2
 MAX_VEL_ERR = 5.0  # m/s
 
-# EU guidelines
+# EU guidelines (increased for Ford angle-based steering in city driving)
 MAX_LATERAL_JERK = 5.0  # m/s^3
-MAX_LATERAL_ACCEL_NO_ROLL = 3.0  # m/s^2
+MAX_LATERAL_ACCEL_NO_ROLL = 5.0  # m/s^2  # Increased from 3.0 for normal city turns
 
 
 def clamp(val, min_val, max_val):
