@@ -153,7 +153,7 @@ def create_angle_control_msg(packer, CAN: CanBus, angle_deg: float, enabled: boo
     "SAPPStatusCoding": 0,
     "ApaSteWhl_D_RqDrv": 0,
     "ApaSteScanMde_D_Stat": 0,
-    "ApaSelSapp_D_Stat": 0,
+    "ApaSelSapp_D_Stat": 1,  # CRITICAL: Tell PSCM that SAPP is "Selectable"!
     "ApaSelPpa_D_Stat": 0,
     "ApaSelPoa_D_Stat": 0,
     "ApaScan_D_Stat": 0,
@@ -198,7 +198,7 @@ def create_speed_spoof_msg(packer, CAN: CanBus, speed_kph: float, counter: int, 
     "StrtrMtrDlyStrt_B_Stat": 0,
   }
 
-  return packer.make_can_msg("EngVehicleSpThrottle2", CAN.cam, values)
+  return packer.make_can_msg("EngVehicleSpThrottle2", CAN.camera, values)
 
 
 def create_brake_speed_spoof_msg(packer, CAN: CanBus, speed_kph: float, counter: int):
@@ -227,7 +227,7 @@ def create_brake_speed_spoof_msg(packer, CAN: CanBus, speed_kph: float, counter:
     "VehStab_D_Stat": 0,
   }
 
-  return packer.make_can_msg("BrakeSysFeatures", CAN.cam, values)
+  return packer.make_can_msg("BrakeSysFeatures", CAN.camera, values)
 
 
 def create_acc_msg(packer, CAN: CanBus, long_active: bool, gas: float, accel: float, stopping: bool, brake_request, v_ego_kph: float):

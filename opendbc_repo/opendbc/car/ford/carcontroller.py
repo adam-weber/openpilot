@@ -778,22 +778,23 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # State 1: Initializing (waiting for PSCM to respond)
         # State 2: Active (can send angle commands)
 
-        # Check if we should enable SAPP
-        if self.sapp_state == 0:
-          # Not active yet, initiate handshake
-          self.sapp_state = 1
-          self.sapp_angle_req = 0
-          cloudlog.info("MODE1: Initiating SAPP handshake")
-
-        # Check PSCM feedback for handshake completion
-        # sapp_handshake: 0=Closed, 1=Open/Ready, 2=Active, 3=Error
-        if CS.sapp_handshake in [1, 2]:  # PSCM is ready
+        # PIGPILOT-STYLE SAPP HANDSHAKE
+        # Even without PAM module, PSCM may respond to handshake
+        if CS.sapp_handshake in [1, 2]:  # PSCM is ready/active
           if CC.latActive:
             self.sapp_state = 2  # Active - send angle requests
+            self.sapp_angle_req = 1  # Toggle to 1 when active (pigpilot does this!)
+            if self.frame % 50 == 0:
+              cloudlog.info("MODE1: SAPP active, sending angle commands")
           else:
             self.sapp_state = 1  # Handshaking but not steering
-        if self.sapp_state == 2:
-          cloudlog.info("MODE1: SAPP handshake complete, angle control active")
+            self.sapp_angle_req = 0
+        else:
+          # PSCM not ready yet, initiate handshake
+          self.sapp_state = 1  # Request handshake
+          self.sapp_angle_req = 0
+          if self.frame % 50 == 0:
+            cloudlog.info(f"MODE1: Waiting for PSCM handshake (currently {CS.sapp_handshake})")
 
         # Log SAPP status every 50 frames (1 second at 50Hz)
         if self.frame % 50 == 0:
@@ -829,9 +830,21 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           # Use planner's steering angle directly (don't recalculate from curvature)
           apply_angle = actuators.steeringAngleDeg * smooth_factor
 
+          # Normalize angles to -180 to +180 range to fix wrapped angle issues
+          # (300° should be -60°, not +300°)
+          def normalize_angle(angle):
+            while angle > 180.0:
+              angle -= 360.0
+            while angle < -180.0:
+              angle += 360.0
+            return angle
+
+          apply_angle = normalize_angle(apply_angle)
+          angle_deg_last_normalized = normalize_angle(self.angle_deg_last)
+
           # Apply rate limiting - asymmetric (faster unwind than wind)
           # Determine if winding (into turn) or unwinding (back to center)
-          steer_up = self.angle_deg_last * apply_angle >= 0. and abs(apply_angle) > abs(self.angle_deg_last)
+          steer_up = angle_deg_last_normalized * apply_angle >= 0. and abs(apply_angle) > abs(angle_deg_last_normalized)
           rate_limits = CarControllerParams.ANGLE_RATE_LIMIT_UP if steer_up else CarControllerParams.ANGLE_RATE_LIMIT_DOWN
 
           # Interpolate rate limit based on speed
