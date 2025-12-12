@@ -170,6 +170,77 @@ def create_angle_control_msg(packer, CAN: CanBus, angle_deg: float, enabled: boo
   return packer.make_can_msg("ParkAid_Data", CAN.main, values)
 
 
+def create_pam_status_msg(packer, CAN: CanBus, sapp_active: bool):
+  """
+  Creates ParkAid_Aud_Warn_Stat message (0x3AA/938) - PAM heartbeat.
+
+  This message tells PSCM that the Park Assist Module (PAM) is alive and
+  what mode is available/active. Critical for SAPP to work continuously!
+
+  Args:
+    sapp_active: True if SAPP mode is currently active (Mode 1 engaged)
+
+  Frequency: 50Hz (same as ParkAid_Data)
+  """
+  values = {
+    # Tell PSCM what modes are available (4 = SAPP only)
+    "ApaMde_D_Avail": 4,  # SAPP available
+    # Tell PSCM current mode (2 = SAPP active, 1 = Off)
+    "ApaMde_D_Stat": 2 if sapp_active else 1,
+    # All other signals default to 0/inactive
+    "PrkAidMsgTxt_D_Rq": 0,
+    "ApaActvSd_D_Actl": 0,
+    "PrkAidSwtch_B_Stat": 0,
+    "RpaChime_D_Rq": 0,
+    "FpaChime_D_Rq": 0,
+    "PrkBrkEl_B_RqFap": 0,
+    "PrkAidSnsFlCntr_D_Stat": 0,
+    "PrkAidSnsFlCrnr_D_Stat": 0,
+    "PrkAidSnsFrCntr_D_Stat": 0,
+    "PrkAidSnsFrCrnr_D_Stat": 0,
+    "SidePrkSnsL1_D_Stat": 0,
+    "SidePrkSnsL2_D_Stat": 0,
+    "SidePrkSnsR1_D_Stat": 0,
+    "SidePrkSnsR2_D_Stat": 0,
+    "PrkAidAudioMute_B_Rq": 0,
+  }
+
+  return packer.make_can_msg("ParkAid_Aud_Warn_Stat", CAN.main, values)
+
+
+def create_pam_status2_msg(packer, CAN: CanBus):
+  """
+  Creates ParkAid_Aud_Warn_Stat2 message (0x3AB/939) - Additional PAM status.
+
+  This is the THIRD required PAM message. Without it, PSCM sets DTC 0xC159
+  "Lost Communication With Parking Assist Control Module" after 5 seconds!
+
+  Frequency: 50Hz (same as other PAM messages)
+  """
+  values = {
+    # Parking sensor statuses - all inactive (no sensors detected)
+    "PrkAidSnsRlCrnr_D_Stat": 0,
+    "PrkAidSnsRrCntr_D_Stat": 0,
+    "PrkAidSnsRrCrnr_D_Stat": 0,
+    "PrkAidSnsRlCntr_D_Stat": 0,
+    "SidePrkSnsL3_D_Stat": 0,
+    "SidePrkSnsL4_D_Stat": 0,
+    "SidePrkSnsR3_D_Stat": 0,
+    "SidePrkSnsR4_D_Stat": 0,
+    # System status
+    "PrkAid_D_Falt": 0,  # No fault
+    "PrkAidFront_D_Stat": 0,  # Front sensors inactive
+    "PrkAidRear_D_Stat": 0,  # Rear sensors inactive
+    "PrkAidChime_D_Stat": 0,  # No chime
+    # Brake requests - all inactive
+    "ApaLongCtrlEnbl_D_Rq": 0,  # No longitudinal control
+    "ApaBrk_A_Rq": 0,  # No brake request
+    "ApaBrk_D_Rq": 0,  # No brake request
+  }
+
+  return packer.make_can_msg("ParkAid_Aud_Warn_Stat2", CAN.main, values)
+
+
 def create_speed_spoof_msg(packer, CAN: CanBus, speed_kph: float, counter: int, gear_reverse: bool):
   """
   Creates spoofed speed message for EngVehicleSpThrottle2 (0x202).
