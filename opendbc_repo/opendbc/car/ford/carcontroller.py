@@ -498,6 +498,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           can_sends.append(fordcan.create_pam_status_msg(
             self.packer, self.CAN, sapp_active=True
           ))
+          # Send PAM status2 - CRITICAL to prevent DTC 0xC159 timeout!
+          can_sends.append(fordcan.create_pam_status2_msg(
+            self.packer, self.CAN
+          ))
           send_angle_instead = True
 
           # Speed spoofing at 50Hz
@@ -535,6 +539,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           # Send PAM status but not active
           can_sends.append(fordcan.create_pam_status_msg(
             self.packer, self.CAN, sapp_active=False
+          ))
+          # Send PAM status2 even when blocked to prevent timeout
+          can_sends.append(fordcan.create_pam_status2_msg(
+            self.packer, self.CAN
           ))
           self.smooth_counter = 0
 

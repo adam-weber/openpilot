@@ -18,6 +18,7 @@
 #define FORD_IPMA_Data             0x3D8U   // TX by OP, IPMA and LKAS user interface
 #define FORD_ParkAid_Data          0x3A8U   // TX by OP, Angle Control (SAPP)
 #define FORD_ParkAid_Aud_Warn_Stat 0x3AAU   // TX by OP, Chime/Audio
+#define FORD_ParkAid_Aud_Warn_Stat2 0x3ABU  // TX by OP, Additional PAM status
 
 // CAN bus numbers.
 #define FORD_MAIN_BUS 0U
@@ -712,6 +713,7 @@ static safety_config ford_init(uint16_t param) {
     {FORD_IPMA_Data, 0, 8, .check_relay = true},          \
     {FORD_ParkAid_Data, 0, 8, .check_relay = true},       \
     {FORD_ParkAid_Aud_Warn_Stat, 0, 8, .check_relay = true}, \
+    {FORD_ParkAid_Aud_Warn_Stat2, 0, 8, .check_relay = true}, \
     {FORD_BrakeSysFeatures, 2, 8, .check_relay = false},  \
     {FORD_EngVehicleSpThrottle2, 2, 8, .check_relay = false}, \
 
