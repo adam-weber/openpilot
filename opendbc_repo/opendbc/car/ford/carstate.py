@@ -77,9 +77,9 @@ class CarState(CarStateBase, MadsCarState):
 
     if self.CP.flags & FordFlags.ALT_STEER_ANGLE:
       self.vehicle_sensors_valid = (
-        int((cp.vl["ParkAid_Data"]["ExtSteeringAngleReq2"] + 1000) * 10) not in (32766, 32767)
-        and cp.vl["ParkAid_Data"]["EPASExtAngleStatReq"] == 0
-        and cp.vl["ParkAid_Data"]["ApaSys_D_Stat"] in (0, 1)
+        int((cp_cam.vl["ParkAid_Data"]["ExtSteeringAngleReq2"] + 1000) * 10) not in (32766, 32767)
+        and cp_cam.vl["ParkAid_Data"]["EPASExtAngleStatReq"] == 0
+        and cp_cam.vl["ParkAid_Data"]["ApaSys_D_Stat"] in (0, 1)
       )
     else:
    	  # Occasionally on startup, the ABS module recalibrates the steering pinion offset, so we need to block engagement
@@ -108,7 +108,7 @@ class CarState(CarStateBase, MadsCarState):
     if self.CP.flags & FordFlags.ALT_STEER_ANGLE:
       steering_angle_init = cp.vl["SteeringPinion_Data_Alt"]["StePinRelInit_An_Sns"]
       if self.vehicle_sensors_valid:
-        steering_angle_est = cp.vl["ParkAid_Data"]["ExtSteeringAngleReq2"]
+        steering_angle_est = cp_cam.vl["ParkAid_Data"]["ExtSteeringAngleReq2"]
         self.steering_angle_offset_deg = steering_angle_est - steering_angle_init
       ret.steeringAngleDeg = steering_angle_init + self.steering_angle_offset_deg
     else:
@@ -405,7 +405,6 @@ class CarState(CarStateBase, MadsCarState):
     if CP.flags & FordFlags.ALT_STEER_ANGLE:
       pt_messages += [
         ("SteeringPinion_Data_Alt", 100),
-        ("ParkAid_Data", 50),
         ("TransGearData",10),
       ]
     else:
@@ -460,6 +459,11 @@ class CarState(CarStateBase, MadsCarState):
       cam_messages += [
         ("Side_Detect_L_Stat", 5),
         ("Side_Detect_R_Stat", 5),
+      ]
+
+    if CP.flags & FordFlags.ALT_STEER_ANGLE:
+      cam_messages += [
+        ("ParkAid_Data", 50),
       ]
 
     return {

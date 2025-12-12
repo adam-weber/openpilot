@@ -167,7 +167,7 @@ def create_angle_control_msg(packer, CAN: CanBus, angle_deg: float, enabled: boo
     "ApaButtnPrssd_B_Stat": 0,
   }
 
-  return packer.make_can_msg("ParkAid_Data", CAN.main, values)
+  return packer.make_can_msg("ParkAid_Data", CAN.camera, values)
 
 
 def create_pam_status_msg(packer, CAN: CanBus, sapp_active: bool):
@@ -205,7 +205,7 @@ def create_pam_status_msg(packer, CAN: CanBus, sapp_active: bool):
     "PrkAidAudioMute_B_Rq": 0,
   }
 
-  return packer.make_can_msg("ParkAid_Aud_Warn_Stat", CAN.main, values)
+  return packer.make_can_msg("ParkAid_Aud_Warn_Stat", CAN.camera, values)
 
 
 def create_pam_status2_msg(packer, CAN: CanBus):
@@ -238,7 +238,7 @@ def create_pam_status2_msg(packer, CAN: CanBus):
     "ApaBrk_D_Rq": 0,  # No brake request
   }
 
-  return packer.make_can_msg("ParkAid_Aud_Warn_Stat2", CAN.main, values)
+  return packer.make_can_msg("ParkAid_Aud_Warn_Stat2", CAN.camera, values)
 
 
 def create_speed_spoof_msg(packer, CAN: CanBus, speed_kph: float, counter: int, gear_reverse: bool):

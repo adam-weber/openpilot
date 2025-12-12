@@ -711,9 +711,9 @@ static safety_config ford_init(uint16_t param) {
     {FORD_ACCDATA_3, 0, 8, .check_relay = true},          \
     {FORD_Lane_Assist_Data1, 0, 8, .check_relay = true},  \
     {FORD_IPMA_Data, 0, 8, .check_relay = true},          \
-    {FORD_ParkAid_Data, 0, 8, .check_relay = true},       \
-    {FORD_ParkAid_Aud_Warn_Stat, 0, 8, .check_relay = true}, \
-    {FORD_ParkAid_Aud_Warn_Stat2, 0, 8, .check_relay = true}, \
+    {FORD_ParkAid_Data, 2, 8, .check_relay = true},       \
+    {FORD_ParkAid_Aud_Warn_Stat, 2, 8, .check_relay = true}, \
+    {FORD_ParkAid_Aud_Warn_Stat2, 2, 8, .check_relay = true}, \
     {FORD_BrakeSysFeatures, 2, 8, .check_relay = false},  \
     {FORD_EngVehicleSpThrottle2, 2, 8, .check_relay = false}, \
 
