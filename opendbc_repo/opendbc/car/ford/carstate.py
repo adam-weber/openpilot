@@ -76,11 +76,16 @@ class CarState(CarStateBase, MadsCarState):
     ret_sp = structs.CarStateSP()
 
     if self.CP.flags & FordFlags.ALT_STEER_ANGLE:
-      self.vehicle_sensors_valid = (
-        int((cp_cam.vl["ParkAid_Data"]["ExtSteeringAngleReq2"] + 1000) * 10) not in (32766, 32767)
-        and cp_cam.vl["ParkAid_Data"]["EPASExtAngleStatReq"] == 0
-        and cp_cam.vl["ParkAid_Data"]["ApaSys_D_Stat"] in (0, 1)
-      )
+      # Check if ParkAid_Data exists (vehicle has PAM module)
+      if "ParkAid_Data" in cp_cam.vl:
+        self.vehicle_sensors_valid = (
+          int((cp_cam.vl["ParkAid_Data"]["ExtSteeringAngleReq2"] + 1000) * 10) not in (32766, 32767)
+          and cp_cam.vl["ParkAid_Data"]["EPASExtAngleStatReq"] == 0
+          and cp_cam.vl["ParkAid_Data"]["ApaSys_D_Stat"] in (0, 1)
+        )
+      else:
+        # No PAM module - we're spoofing it, so sensors are valid
+        self.vehicle_sensors_valid = True
     else:
    	  # Occasionally on startup, the ABS module recalibrates the steering pinion offset, so we need to block engagement
       # The vehicle usually recovers out of this state within a minute of normal driving
@@ -107,7 +112,7 @@ class CarState(CarStateBase, MadsCarState):
     # steering wheel
     if self.CP.flags & FordFlags.ALT_STEER_ANGLE:
       steering_angle_init = cp.vl["SteeringPinion_Data_Alt"]["StePinRelInit_An_Sns"]
-      if self.vehicle_sensors_valid:
+      if self.vehicle_sensors_valid and "ParkAid_Data" in cp_cam.vl:
         steering_angle_est = cp_cam.vl["ParkAid_Data"]["ExtSteeringAngleReq2"]
         self.steering_angle_offset_deg = steering_angle_est - steering_angle_init
       ret.steeringAngleDeg = steering_angle_init + self.steering_angle_offset_deg
