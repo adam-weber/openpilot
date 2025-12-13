@@ -1,3 +1,4 @@
+import time
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
@@ -195,7 +196,7 @@ class CarState(CarStateBase, MadsCarState):
     # Triple-tap GAP button detection for test mode
     # Detect rising edge (button just pressed)
     if self.distance_button and not prev_distance_button:
-      current_time = ret.vEgoRaw / 100.0  # Use vEgo as rough timestamp
+      current_time = time.time()  # Use real timestamp instead of vEgo
       time_since_last = current_time - self.test_mode_button_last_time
 
       # Reset counter if too much time passed (>2 seconds)
