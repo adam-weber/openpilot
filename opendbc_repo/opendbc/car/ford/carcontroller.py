@@ -121,6 +121,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.test_mode_last = 0  # Track previous test mode state for beep
     self.smooth_counter = 0  # Ping pong fix: count frames of stability
 
+    # Mode 2 (Extended Path Following) - CANFD only
+    # Mode 1 = PathFollowingLimitedMode (conservative, current default)
+    # Mode 2 = PathFollowingExtendedMode (more authority, longer preview)
+    # See MODE_2_EXTENDED_PATH_FOLLOWING.md for details
+    self.use_mode_2 = self.params.get_bool("FordUseMode2")  # Default: False
+
    ################################## lateral control parameters ##############################################
 
     # Variables to initialize (these get updated every scan as part of the control code)
@@ -336,6 +342,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
     actuators = CC.actuators
     hud_control = CC.hudControl
+    lat_active = CC.latActive  # Define early for use throughout update()
     main_on = CS.out.cruiseState.available
     # if self.fordVariables is None:
       # act = actuators.as_builder()
@@ -922,19 +929,25 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       self.path_offset_last = path_offset
       self.path_angle_last = path_angle
 
-
-      # set lat_active to the value of CC.latActive
-      lat_active = CC.latActive
-
       # Send normal curvature control if not using angle mode
+      # (lat_active already defined at top of update() method)
       if not send_angle_instead and self.CP.flags & FordFlags.CANFD:
-        # TODO: extended mode
         # Ford uses four individual signals to dictate how to drive to the car. Curvature alone (limited to 0.02m/s^2)
         # can actuate the steering for a large portion of any lateral movements. However, in order to get further control on
         # steer actuation, the other three signals are necessary. Ford controls vehicles differently than most other makes.
         # A detailed explanation on ford control can be found here:
         # https://www.f150gen14.com/forum/threads/introducing-bluepilot-a-ford-specific-fork-for-comma3x-openpilot.24241/#post-457706
-        mode = 1 if lat_active else 0
+
+        # Mode selection: Extended (2) or Limited (1)
+        # Mode 2 = PathFollowingExtendedMode (more authority, longer preview, similar to Blue Cruise)
+        # Mode 1 = PathFollowingLimitedMode (conservative, default)
+        if self.use_mode_2 and lat_active:
+          mode = 2  # Extended mode
+        elif lat_active:
+          mode = 1  # Limited mode (default)
+        else:
+          mode = 0  # Inactive
+
         counter = (self.frame // CarControllerParams.STEER_STEP) % 0x10
         can_sends.append(fordcan.create_lat_ctl2_msg(
           self.packer, self.CAN, mode, ramp_type, self.precision_type, -path_offset, -path_angle,
