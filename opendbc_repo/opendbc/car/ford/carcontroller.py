@@ -125,7 +125,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Mode 1 = PathFollowingLimitedMode (conservative, current default)
     # Mode 2 = PathFollowingExtendedMode (more authority, longer preview)
     # See MODE_2_EXTENDED_PATH_FOLLOWING.md for details
-    self.use_mode_2 = self.params.get_bool("FordUseMode2")  # Default: False
+    try:
+      self.use_mode_2 = self.params.get_bool("FordUseMode2")
+    except:
+      self.use_mode_2 = False  # Default: disabled if param doesn't exist
 
    ################################## lateral control parameters ##############################################
 
