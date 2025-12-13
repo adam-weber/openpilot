@@ -183,16 +183,14 @@ class CarState(CarStateBase, MadsCarState):
     ret.stockAeb = bool(cp_cam.vl["ACCDATA_2"]["CmbbBrkDecel_B_Rq"])
 
     # button presses
-    # CAN vehicles use Steering_Data_HS1, CANFD uses Steering_Data_FD1
-    steering_msg = "Steering_Data_FD1" if self.CP.flags & FordFlags.CANFD else "Steering_Data_HS1"
-    ret.leftBlinker = cp.vl[steering_msg]["TurnLghtSwtch_D_Stat"] == 1
-    ret.rightBlinker = cp.vl[steering_msg]["TurnLghtSwtch_D_Stat"] == 2
+    ret.leftBlinker = cp.vl["Steering_Data_FD1"]["TurnLghtSwtch_D_Stat"] == 1
+    ret.rightBlinker = cp.vl["Steering_Data_FD1"]["TurnLghtSwtch_D_Stat"] == 2
     # TODO: block this going to the camera otherwise it will enable stock TJA
-    ret.genericToggle = bool(cp.vl[steering_msg]["TjaButtnOnOffPress"])
+    ret.genericToggle = bool(cp.vl["Steering_Data_FD1"]["TjaButtnOnOffPress"])
     prev_distance_button = self.distance_button
     prev_lc_button = self.lc_button
-    self.distance_button = cp.vl[steering_msg]["AccButtnGapTogglePress"]
-    self.lc_button = bool(cp.vl[steering_msg]["TjaButtnOnOffPress"])
+    self.distance_button = cp.vl["Steering_Data_FD1"]["AccButtnGapTogglePress"]
+    self.lc_button = bool(cp.vl["Steering_Data_FD1"]["TjaButtnOnOffPress"])
 
     # Triple-tap GAP button detection for test mode
     # Detect rising edge (button just pressed)
@@ -226,7 +224,7 @@ class CarState(CarStateBase, MadsCarState):
       ret.rightBlindspot = cp_bsm.vl["Side_Detect_R_Stat"]["SodDetctRight_D_Stat"] != 0
 
     # Stock steering buttons so that we can passthru blinkers etc.
-    self.buttons_stock_values = cp.vl[steering_msg]
+    self.buttons_stock_values = cp.vl["Steering_Data_FD1"]
     # Stock values from IPMA so that we can retain some stock functionality
     self.acc_tja_status_stock_values = cp_cam.vl["ACCDATA_3"]
     self.lkas_status_stock_values = cp_cam.vl["IPMA_Data"]
@@ -391,7 +389,7 @@ class CarState(CarStateBase, MadsCarState):
       ("EngBrakeData", 10),
       ("Cluster_Info1_FD1", 10),
       ("EPAS_INFO", 50),
-      ("Steering_Data_FD1" if CP.flags & FordFlags.CANFD else "Steering_Data_HS1", 10),
+      ("Steering_Data_FD1", 10),
       ("BodyInfo_3_FD1", 2),
       ("RCMStatusMessage2_FD1", 10),
     ]
