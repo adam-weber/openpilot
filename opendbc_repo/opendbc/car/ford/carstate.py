@@ -466,10 +466,12 @@ class CarState(CarStateBase, MadsCarState):
         ("Side_Detect_R_Stat", 5),
       ]
 
-    if CP.flags & FordFlags.ALT_STEER_ANGLE:
-      cam_messages += [
-        ("ParkAid_Data", 50),
-      ]
+    # ParkAid_Data is only needed if vehicle actually has PAM module
+    # Since we're spoofing PAM (not receiving from it), don't expect this message
+    # if CP.flags & FordFlags.ALT_STEER_ANGLE:
+    #   cam_messages += [
+    #     ("ParkAid_Data", 50),
+    #   ]
 
     return {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, CanBus(CP).main),
