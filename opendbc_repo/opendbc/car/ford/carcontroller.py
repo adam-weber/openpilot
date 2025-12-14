@@ -119,6 +119,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.sapp_angle_req = 0  # Toggles 0/1 to indicate new angle request
     self.angle_deg_last = 0.0  # Track last angle for rate limiting
     self.test_mode_last = 0  # Track previous test mode state for beep
+    self.test_mode_beep = False  # Persists beep flag until ACC UI message is sent
     self.smooth_counter = 0  # Ping pong fix: count frames of stability
 
     # Mode 2 (Extended Path Following) - CANFD only
@@ -400,15 +401,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     send_angle_instead = False
     if (self.frame % 2) == 0:
       # Detect test mode activation and trigger beep
-      test_mode_beep = False
       if CS.test_mode_active != self.test_mode_last:
         if CS.test_mode_active == 1:
           # Test mode activated, trigger beep
-          test_mode_beep = True
-          cloudlog.info("MODE1: Test mode activated - beep triggered")
+          self.test_mode_beep = True
+          cloudlog.error("!!! MODE1: BEEP TRIGGERED !!!")
         else:
           # Test mode deactivated
-          cloudlog.info("MODE1: Test mode deactivated")
+          cloudlog.error("MODE1: Test mode deactivated")
         self.test_mode_last = CS.test_mode_active
 
       # Mode 1: Angle control with speed spoofing (PhoenixPilot-style)
@@ -463,8 +463,15 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             if self.frame % 50 == 0:
               cloudlog.info(f"MODE1: Ping-pong fix active, damping to {smooth_factor:.2f}")
 
-          # Use planner's steering angle directly (don't recalculate from curvature)
-          apply_angle = actuators.steeringAngleDeg * smooth_factor
+          # Calculate steering wheel angle from curvature (like Mode 0 does)
+          # This gives Mode 1 the same steering authority as Mode 0
+          angle_rad = math.atan(self.CP.wheelbase * actuators.curvature)
+          desired_angle = angle_rad * self.CP.steerRatio * (180.0 / math.pi)
+          apply_angle = desired_angle * smooth_factor
+
+          # Log comparison for debugging
+          if self.frame % 50 == 0:
+            cloudlog.info(f"MODE1 ANGLE CALC: curvature={actuators.curvature:.5f}, calc_angle={desired_angle:.1f}°, planner_angle={actuators.steeringAngleDeg:.1f}°")
 
           # Normalize angles to -180 to +180 range
           def normalize_angle(angle):
@@ -490,10 +497,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
                             self.angle_deg_last - angle_rate_lim_frame,
                             self.angle_deg_last + angle_rate_lim_frame)
 
-          # Log angle details every 10 frames
-          if self.frame % 10 == 0:
-            rate_limited = abs(apply_angle - (actuators.steeringAngleDeg * smooth_factor)) > 0.1
-            cloudlog.info(f"MODE1 ANGLE: planner={actuators.steeringAngleDeg:.1f}°, smooth={smooth_factor:.2f}, "
+          # Log angle details every 50 frames (2x/sec)
+          if self.frame % 50 == 0:
+            rate_limited = abs(apply_angle - (desired_angle * smooth_factor)) > 0.1
+            cloudlog.info(f"MODE1 ANGLE: desired={desired_angle:.1f}°, smooth={smooth_factor:.2f}, "
                           f"sending={apply_angle:.1f}°, last={self.angle_deg_last:.1f}°, "
                           f"rate_lim={angle_rate_lim:.1f}°/s, RATE_LIMITED={rate_limited}, speed={CS.out.vEgoRaw:.1f}m/s")
 
@@ -1013,10 +1020,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       self.accel_pitch_compensated = accel_pitch_compensated
 
     ### ui ###
-    # Test mode beep defaults to False, set to True when Mode 1 activates
-    if 'test_mode_beep' not in locals():
-      test_mode_beep = False
-
     send_ui = (self.main_on_last != main_on) or (self.lkas_enabled_last != CC.latActive) or (self.steer_alert_last != steer_alert)
     # send lkas ui msg at 1Hz or if ui state changes
     if (self.frame % CarControllerParams.LKAS_UI_STEP) == 0 or send_ui:
@@ -1040,6 +1043,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       send_bars = True
 
     if (self.frame % CarControllerParams.ACC_UI_STEP) == 0 or send_ui:
+      if self.test_mode_beep:
+        cloudlog.error(f"SENDING ACC UI WITH BEEP! frame={self.frame}")
       can_sends.append(
         fordcan.create_acc_ui_msg(
           self.packer,
@@ -1056,9 +1061,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           send_bars,
           self.tja_warn,
           self.tja_msg,
-          test_mode_beep,
+          self.test_mode_beep,
         )
       )
+      # Clear beep flag after sending
+      if self.test_mode_beep:
+        self.test_mode_beep = False
 
     self.main_on_last = main_on
     self.send_ui_last = send_ui
