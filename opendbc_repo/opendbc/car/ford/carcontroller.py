@@ -413,46 +413,36 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
       # Mode 1: Angle control with speed spoofing (PhoenixPilot-style)
       if CS.test_mode_active == 1 and lat_active:
-        # SAPP handshake state machine
+        # SAPP state machine (no handshake - Maverick has no PAM module)
         # State 0: Inactive
-        # State 1: Initializing (waiting for PSCM to respond)
         # State 2: Active (can send angle commands)
+        # Skip state 1 - ExtSteeringAngleReq2 works without formal SAPP handshake
 
-        # PIGPILOT-STYLE SAPP HANDSHAKE
-        # Even without PAM module, PSCM may respond to handshake
-        if CS.sapp_handshake in [1, 2]:  # PSCM is ready/active
-          if CC.latActive:
-            self.sapp_state = 2  # Active - send angle requests
-            self.sapp_angle_req = 1  # Toggle to 1 when active (pigpilot does this!)
-            if self.frame % 50 == 0:
-              cloudlog.info("MODE1: SAPP active, sending angle commands")
-          else:
-            self.sapp_state = 1  # Handshaking but not steering
-            self.sapp_angle_req = 0
-        else:
-          # PSCM not ready yet, initiate handshake
-          self.sapp_state = 1  # Request handshake
-          self.sapp_angle_req = 0
-          if self.frame % 50 == 0:
-            cloudlog.info(f"MODE1: Waiting for PSCM handshake (currently {CS.sapp_handshake})")
+        # Go straight to active state (no PAM module to handshake with)
+        if self.sapp_state == 0:
+          self.sapp_state = 2  # Skip handshake, go straight to active
+          self.sapp_angle_req = 1
+          cloudlog.info("MODE1: Activated (no handshake - no PAM module)")
 
         # Log SAPP status every 50 frames (1 second at 50Hz)
         if self.frame % 50 == 0:
           cloudlog.info(f"MODE1 STATUS: state={self.sapp_state}, handshake={CS.sapp_handshake}, "
                         f"speed_ok={CS.sapp_speed_ok}, valid={CS.sapp_signal_valid}, can_reach={CS.sapp_can_reach}, torque_ok={CS.sapp_torque_ok}")
 
-        # Only send angle commands if PSCM is ready
+        # Only send angle commands if active
         if self.sapp_state == 2:
-          # Use planner's steering angle directly
-          apply_angle = self.angle_deg_last
+          # Calculate steering wheel angle from curvature (like Mode 0 does)
+          # This gives Mode 1 the same steering authority as Mode 0
+          angle_rad = math.atan(self.CP.wheelbase * actuators.curvature)
+          desired_angle = angle_rad * self.CP.steerRatio * (180.0 / math.pi)
 
           # Ping pong fix: track stability and apply damping
           smooth_factor = 1.0
-          angle_delta = abs(actuators.steeringAngleDeg - self.angle_deg_last)
+          angle_delta = abs(desired_angle - self.angle_deg_last)
 
           # Check if angle is stable (small delta and near center)
           if (angle_delta <= CarControllerParams.SMOOTH_DELTA and
-              abs(actuators.steeringAngleDeg) <= CarControllerParams.SMOOTH_DELTA):
+              abs(desired_angle) <= CarControllerParams.SMOOTH_DELTA):
             self.smooth_counter += 1
           else:
             self.smooth_counter = 0
@@ -463,10 +453,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             if self.frame % 50 == 0:
               cloudlog.info(f"MODE1: Ping-pong fix active, damping to {smooth_factor:.2f}")
 
-          # Calculate steering wheel angle from curvature (like Mode 0 does)
-          # This gives Mode 1 the same steering authority as Mode 0
-          angle_rad = math.atan(self.CP.wheelbase * actuators.curvature)
-          desired_angle = angle_rad * self.CP.steerRatio * (180.0 / math.pi)
           apply_angle = desired_angle * smooth_factor
 
           # Log comparison for debugging
