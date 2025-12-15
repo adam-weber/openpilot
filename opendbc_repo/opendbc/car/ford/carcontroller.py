@@ -396,7 +396,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     reset_steering = 0 # initialize reset_steering
     ramp_type = 2 # initialize ramp_type
 
-    # Mode 1: Send SAPP angle control at 50Hz (like PhoenixPilot)
+    # Mode 1: Send SAPP angle control at 50Hz (like PhoenixPilot/PigPilot)
+    # ALWAYS send ParkAid_Data to allow PSCM handshake, even when Mode 1 inactive
     # This must run at 50Hz or PSCM will timeout!
     send_angle_instead = False
     if (self.frame % 2) == 0:
@@ -413,16 +414,24 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
       # Mode 1: Angle control with speed spoofing (PhoenixPilot-style)
       if CS.test_mode_active == 1 and lat_active:
-        # SAPP state machine (no handshake - Maverick has no PAM module)
-        # State 0: Inactive
-        # State 2: Active (can send angle commands)
-        # Skip state 1 - ExtSteeringAngleReq2 works without formal SAPP handshake
+        # SAPP handshake state machine (like PigPilot)
+        # State 1: Initializing/Off (ApaSys_D_Stat = 1 "Off")
+        # State 2: Active (ApaSys_D_Stat = 2 "On")
+        # PSCM responds via SAPPAngleControlStat1: 0=Closed, 1=Open, 2=Active
 
-        # Go straight to active state (no PAM module to handshake with)
-        if self.sapp_state == 0:
-          self.sapp_state = 2  # Skip handshake, go straight to active
-          self.sapp_angle_req = 1
-          cloudlog.info("MODE1: Activated (no handshake - no PAM module)")
+        # State machine based on PSCM handshake response
+        if CS.sapp_handshake in [1, 2]:
+          # PSCM has responded - go to active state
+          if self.sapp_state != 2:
+            self.sapp_state = 2
+            self.sapp_angle_req = 1
+            cloudlog.info(f"MODE1: PSCM handshake successful ({CS.sapp_handshake}) - going active")
+        else:
+          # PSCM not ready yet - stay in initializing state
+          if self.sapp_state == 0:
+            cloudlog.info("MODE1: Requesting PSCM handshake")
+          self.sapp_state = 1  # Initializing
+          self.sapp_angle_req = 0
 
         # Log SAPP status every 50 frames (1 second at 50Hz)
         if self.frame % 50 == 0:
@@ -550,11 +559,24 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.smooth_counter = 0
 
       else:
-        # Test mode inactive or lat not active, reset SAPP state
-        if self.sapp_state != 0:
-          self.sapp_state = 0
+        # Test mode inactive or lat not active
+        # Send ParkAid_Data with "Off" state to maintain PSCM connection
+        if self.sapp_state != 1:
+          self.sapp_state = 1  # State 1 = "Off" (ready but not active)
           self.angle_deg_last = 0.0
-          cloudlog.info("MODE1: SAPP deactivated")
+          cloudlog.info("MODE1: SAPP off - maintaining PSCM connection")
+
+        # Send ParkAid_Data with ApaSys_D_Stat = 1 ("Off") to keep PSCM ready
+        can_sends.append(fordcan.create_angle_control_msg(
+          self.packer, self.CAN, CS.out.steeringAngleDeg, False, 1, 0
+        ))
+        # Send PAM status as inactive
+        can_sends.append(fordcan.create_pam_status_msg(
+          self.packer, self.CAN, sapp_active=False
+        ))
+        can_sends.append(fordcan.create_pam_status2_msg(
+          self.packer, self.CAN
+        ))
 
     # send steer msg at 20Hz
     if (self.frame % CarControllerParams.STEER_STEP) == 0:
